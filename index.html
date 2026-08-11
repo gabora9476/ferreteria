@@ -6,7 +6,7 @@
 <title>Pinturas Valle Fresco 230 · Contabilidad e Inventario</title>
 <meta name="description" content="Sistema profesional de contabilidad, inventario y consultas por voz para Pinturas Valle Fresco 230 S.R.L, con tasa BCV automática." />
 <meta name="theme-color" content="#0b1220" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230f172a'/%3E%3Cg transform='translate(256,270)'%3E%3Cellipse cx='0' cy='60' rx='90' ry='18' fill='%23f59e0b' opacity='0.4'/%3E%3Crect x='-60' y='-80' width='120' height='130' rx='14' fill='%23f59e0b'/%3E%3Crect x='-40' y='-100' width='80' height='28' rx='8' fill='%23fbbf24'/%3E%3Crect x='-55' y='-30' width='110' height='12' rx='4' fill='%230f172a' opacity='0.25'/%3E%3Crect x='-30' y='-65' width='60' height='10' rx='3' fill='%230f172a' opacity='0.3'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230f172a'/%3E%3Cg transform='translate(256,270)'%3E%3Cellipse cx='0' cy='60' rx='90' ry='18' fill='%23f59e0b' opacity='0.4'/%3E%3Crect x='-60' y='-80' width='120' height='130' rx='14' fill='%23f59e0b'/%3E%3Crect x='-40' y='-100' width='80' height='28' rx='8' fill='%23fbbf24'/%3E%3Crect x='-55' y='-30' width='110' height='12' rx='4' fill='%230f172a' opacity='0.25'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -108,7 +108,7 @@
   .badge{ display:inline-flex; align-items:center; gap:.3rem; padding:.15rem .55rem; border-radius:999px; font-size:.7rem; font-weight:600; letter-spacing:.02em; border:1px solid transparent; }
   .kpi-card{ position:relative; overflow:hidden; }
   .kpi-card::after{ content:""; position:absolute; right:-20px; top:-20px; width:90px; height:90px; border-radius:9999px; background:radial-gradient(circle, currentColor, transparent 70%); opacity:.10; }
-  /* AUTO UPPERCASE para inputs de texto (no numéricos, no password) */
+  /* AUTO UPPERCASE para inputs de texto */
   input[data-uppercase="true"], textarea[data-uppercase="true"]{
     text-transform: uppercase;
   }
@@ -121,8 +121,8 @@
 "use strict";
 /* =========================================================================
    PINTURAS VALLE FRESCO 230, S.R.L
-   Sistema de Contabilidad e Inventario
-   Backend: Supabase (PostgreSQL)  |  Sin dependencia de localStorage para datos
+   Sistema de Contabilidad e Inventario con Gestión de SKU Automático
+   Backend: Supabase (PostgreSQL)
    ========================================================================= */
 
 /* ---- Constantes ---- */
@@ -147,7 +147,6 @@ function todayStr(){ const d = new Date(); return d.getFullYear() + '-' + String
 function fmtDateShort(iso){ try{ return new Date(iso).toLocaleDateString('es-VE',{ day:'2-digit', month:'short', year:'numeric' }); }catch(e){ return iso; } }
 function fmtDateTime(iso){ try{ return new Date(iso).toLocaleString('es-VE',{ day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); }catch(e){ return iso; } }
 function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString('es-VE',{ hour:'2-digit', minute:'2-digit' }); }catch(e){ return ''; } }
-function clamp(n,min,max){ return Math.min(max, Math.max(min, n)); }
 function debounce(fn, ms){ let t=null; return function(...args){ clearTimeout(t); t=setTimeout(()=>fn.apply(this,args), ms); }; }
 function toUpper(s){ return String(s||'').toUpperCase(); }
 
@@ -165,7 +164,82 @@ function categoryTheme(cat){ let h=0; const s=String(cat||''); for(let i=0;i<s.l
 function categoryBadge(cat){ const t=categoryTheme(cat); return `<span class="badge ${t.bg} ${t.text} ring-1 ${t.ring}">${esc(cat)}</span>`; }
 
 /* =========================================================================
-   CAPA DE DATOS (Supabase) — caché en memoria
+   GENERADOR AUTOMÁTICO DE CÓDIGOS / SKU POR CATEGORÍA, NOMBRE Y TIPO
+   ========================================================================= */
+function generateProductCode(category, name, currentCode) {
+  const normCat = normalize(category);
+  const normName = normalize(name);
+
+  // 1. Prefijo de Categoría
+  let catPrefix = 'PRD';
+  if (normCat.includes('latex')) catPrefix = 'LAT';
+  else if (normCat.includes('esmalte') || normCat.includes('sintetico')) catPrefix = 'ESM';
+  else if (normCat.includes('base') || normCat.includes('anticorrosivo')) catPrefix = 'BAS';
+  else if (normCat.includes('caucho') || normCat.includes('acrilico')) catPrefix = 'CAU';
+  else if (normCat.includes('solvente') || normCat.includes('diluyente') || normCat.includes('thinner')) catPrefix = 'SOL';
+  else if (normCat.includes('accesorio') || normCat.includes('brocha') || normCat.includes('rodillo')) catPrefix = 'ACC';
+  else if (normCat.includes('preparacion') || normCat.includes('masilla') || normCat.includes('pasta')) catPrefix = 'PRE';
+  else if (normCat.includes('especial') || normCat.includes('trafico')) catPrefix = 'ESP';
+  else {
+    const words = category.trim().toUpperCase().split(/\s+/);
+    if(words.length >= 2) catPrefix = (words[0].slice(0,2) + words[1].slice(0,1));
+    else if(words[0].length >= 3) catPrefix = words[0].slice(0,3);
+  }
+
+  // 2. Prefijo de Objeto/Color/Nombre
+  let namePrefix = 'GEN';
+  if (normName.includes('blanco hueso')) namePrefix = 'BLH';
+  else if (normName.includes('blanco brillante')) namePrefix = 'BLB';
+  else if (normName.includes('blanco crema')) namePrefix = 'BLC';
+  else if (normName.includes('blanco')) namePrefix = 'BLA';
+  else if (normName.includes('amarillo crema')) namePrefix = 'AMC';
+  else if (normName.includes('amarillo')) namePrefix = 'AMA';
+  else if (normName.includes('negro mate')) namePrefix = 'NGM';
+  else if (normName.includes('negro')) namePrefix = 'NEG';
+  else if (normName.includes('rojo minio') || normName.includes('rojo')) namePrefix = 'ROJ';
+  else if (normName.includes('azul')) namePrefix = 'AZU';
+  else if (normName.includes('verde')) namePrefix = 'VER';
+  else if (normName.includes('gris')) namePrefix = 'GRI';
+  else if (normName.includes('thinner')) namePrefix = 'THI';
+  else if (normName.includes('brocha')) namePrefix = 'BRO';
+  else if (normName.includes('rodillo')) namePrefix = 'ROD';
+  else if (normName.includes('masilla')) namePrefix = 'MAS';
+  else if (normName.includes('sellador')) namePrefix = 'SEL';
+  else if (normName.includes('trafico')) namePrefix = 'TRA';
+  else {
+    const words = name.trim().toUpperCase().split(/\s+/).filter(w => w.length > 2);
+    if (words.length >= 2) namePrefix = (words[0].slice(0,2) + words[1].slice(0,1));
+    else if (words.length === 1) namePrefix = words[0].slice(0,3);
+  }
+
+  // 3. Prefijo de Tipo / Presentación / Formato
+  let typePrefix = 'GEN';
+  if (normName.includes('1/4 gal') || normName.includes('cuarto')) typePrefix = '14G';
+  else if (normName.includes('cunete') || normName.includes('5 gal')) typePrefix = 'CUN';
+  else if (normName.includes('1 gal') || normName.includes('galon')) typePrefix = 'GAL';
+  else if (normName.includes('1 lit') || normName.includes('1l')) typePrefix = '1LT';
+  else if (normName.includes('1 kg') || normName.includes('kilo')) typePrefix = '1KG';
+  else if (normName.includes('3 pulg') || normName.includes('3"')) typePrefix = '3IN';
+  else if (normName.includes('4 pulg') || normName.includes('4"')) typePrefix = '4IN';
+  else if (normName.includes('9 pulg') || normName.includes('9"')) typePrefix = '9IN';
+
+  // 4. Secuencia / Contador único aleatorio
+  const existingCodes = new Set(DB.getProducts().map(p => (p.codigo||'').toUpperCase()));
+  let num = Math.floor(Math.random() * 899 + 100);
+  let generated = `${catPrefix}-${namePrefix}-${typePrefix}-${num}`;
+  
+  let attempts = 0;
+  while(existingCodes.has(generated) && attempts < 50) {
+    num = Math.floor(Math.random() * 899 + 100);
+    generated = `${catPrefix}-${namePrefix}-${typePrefix}-${num}`;
+    attempts++;
+  }
+
+  return generated;
+}
+
+/* =========================================================================
+   CAPA DE DATOS (Supabase)
    ========================================================================= */
 const DB = {
   _products: [],
@@ -202,7 +276,7 @@ const DB = {
   async saveProduct(p){
     const isNew = !p.id;
     const payload = {
-      nombre: p.nombre, descripcion: p.descripcion || '', categoria: p.categoria,
+      codigo: p.codigo, nombre: p.nombre, descripcion: p.descripcion || '', categoria: p.categoria,
       precio: p.precio, costo: p.costo, stock: p.stock, stock_min: p.stock_min,
       ubicacion: p.ubicacion, activo: true, actualizado_en: new Date().toISOString()
     };
@@ -239,7 +313,6 @@ const DB = {
   /* TRANSACCIONES */
   getTransactions(){ return this._transactions; },
   async saveTransaction(tx){
-    // Ajustar stock si aplica
     if(tx.items){
       for(const item of tx.items){
         const delta = tx.tipo === 'venta' ? -item.cantidad : (tx.tipo === 'entrada_inventario' ? item.cantidad : 0);
@@ -259,7 +332,6 @@ const DB = {
   async deleteTransaction(id){
     const tx = this._transactions.find(t=>t.id===id);
     if(!tx) return false;
-    // Revertir stock
     if(tx.items){
       for(const item of tx.items){
         const delta = tx.tipo === 'venta' ? item.cantidad : (tx.tipo === 'entrada_inventario' ? -item.cantidad : 0);
@@ -326,7 +398,7 @@ const DB = {
 };
 
 /* =========================================================================
-   SESIÓN (localStorage solo para la sesión activa)
+   SESIÓN
    ========================================================================= */
 const Session = {
   get(){ try{ const r=localStorage.getItem(SESSION_KEY); return r?JSON.parse(r):null; }catch(e){ return null; } },
@@ -343,7 +415,6 @@ const Rate = {
   loadFromConfig(){
     this.state.mode       = DB.getConfig('modo_tasa', 'auto');
     this.state.manualRate = parseFloat(DB.getConfig('tasa_manual', '0')) || null;
-    // La tasa BCV se cachea en memoria y se re-obtiene al iniciar
   },
   markup(){ return parseFloat(DB.getConfig('margen_porcentaje', String(DEFAULT_MARKUP))) || DEFAULT_MARKUP; },
   sellRate(){
@@ -390,7 +461,7 @@ const Rate = {
 };
 
 /* =========================================================================
-   TOASTS
+   TOASTS & CONFIRMACIÓN
    ========================================================================= */
 function toast(message, kind){
   kind = kind || 'info';
@@ -408,9 +479,6 @@ function toast(message, kind){
   setTimeout(()=>{ el.style.transition='opacity .25s ease, transform .25s ease'; el.style.opacity='0'; el.style.transform='translateY(6px)'; setTimeout(()=>el.remove(), 260); }, 3400);
 }
 
-/* =========================================================================
-   CONFIRMACIÓN GENÉRICA
-   ========================================================================= */
 let _confirmResolver = null;
 function askConfirm(title, message, confirmLabel, danger){
   return new Promise((resolve)=>{
@@ -460,7 +528,6 @@ function afterRender(){
   wireAutouppercase();
 }
 
-/* AUTO-UPPERCASE: aplica a todos los inputs/textarea con data-uppercase */
 function wireAutouppercase(){
   document.querySelectorAll('[data-uppercase="true"]').forEach(el=>{
     if(!el._ucWired){
@@ -470,7 +537,6 @@ function wireAutouppercase(){
         el.value = el.value.toUpperCase();
         try{ el.setSelectionRange(start, end); }catch(e){}
       });
-      // Aplicar al valor inicial también
       if(el.value) el.value = el.value.toUpperCase();
     }
   });
@@ -618,9 +684,6 @@ function renderTabContent(){
 
 function setTab(tab){ UI.activeTab=tab; UI.modal=null; renderApp(); window.scrollTo({top:0,behavior:'instant'in window?'instant':'auto'}); }
 
-/* =========================================================================
-   CONFIRMACIÓN
-   ========================================================================= */
 function renderConfirmDialog(){
   let host = document.getElementById('confirm-root');
   if(!host){ host=document.createElement('div'); host.id='confirm-root'; document.body.appendChild(host); }
@@ -716,7 +779,7 @@ function renderDashboardTab(){
         <div class="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
           <i data-lucide="shopping-cart" class="w-5 h-5"></i>
         </div>
-        <div><p class="font-semibold text-white text-sm">Registrar venta</p><p class="text-xs text-slate-500">Descuenta stock automáticamente</p></div>
+        <div><p class="font-semibold text-white text-sm">Registrar venta</p><p class="text-xs text-slate-500">Facturación y descuento de stock</p></div>
       </button>
       ${admin ? `
       <button data-action="openTransactionModal" data-txtype="gasto" class="glass rounded-2xl p-4 flex items-center gap-3 text-left hover:border-red-500/40 transition-colors group">
@@ -742,7 +805,13 @@ function renderDashboardTab(){
       <div class="space-y-2">
         ${lowStock.slice(0,5).map(p=>`
           <div class="flex items-center justify-between text-sm py-1.5 border-b border-white/5 last:border-0">
-            <div class="min-w-0"><p class="text-slate-200 truncate">${esc(p.nombre)}</p><p class="text-[11px] text-slate-500">${esc(p.ubicacion)}</p></div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-mono-num px-1.5 py-0.5 rounded bg-white/10 text-amber-300">${esc(p.codigo)}</span>
+                <p class="text-slate-200 truncate font-medium">${esc(p.nombre)}</p>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-0.5">${esc(p.ubicacion)}</p>
+            </div>
             <span class="badge ${p.stock===0?'bg-red-500/15 text-red-300 ring-1 ring-red-500/30':'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30'} font-mono-num shrink-0 ml-2">${p.stock} / mín ${p.stock_min}</span>
           </div>`).join('')}
       </div>
@@ -766,7 +835,7 @@ function renderTxRow(t, showActions){
     entrada_inventario: {icon:'package-plus',  color:'text-sky-300',    bg:'bg-sky-500/15',      sign:'',  label:'Entrada de inventario'},
   }[t.tipo] || {icon:'circle', color:'text-slate-300', bg:'bg-slate-500/15', sign:'', label:t.tipo};
 
-  const items = t.items && t.items.length ? t.items.map(i=>`${i.cantidad}× ${esc(i.nombre)}`).join(', ') : esc(t.descripcion||'');
+  const items = t.items && t.items.length ? t.items.map(i=>`${i.cantidad}× [${esc(i.codigo||'SKU')}] ${esc(i.nombre)}`).join(', ') : esc(t.descripcion||'');
   const user = Session.get();
   const admin = isAdmin(user);
 
@@ -774,7 +843,7 @@ function renderTxRow(t, showActions){
   <div class="flex items-center gap-3 py-2.5 border-b border-white/5 last:border-0">
     <div class="w-9 h-9 rounded-lg ${typeMeta.bg} ${typeMeta.color} flex items-center justify-center shrink-0"><i data-lucide="${typeMeta.icon}" class="w-4 h-4"></i></div>
     <div class="min-w-0 flex-1">
-      <p class="text-sm text-slate-200 truncate">${items || typeMeta.label}</p>
+      <p class="text-sm text-slate-200 truncate font-medium">${items || typeMeta.label}</p>
       <p class="text-[11px] text-slate-500 font-mono-num">${fmtDateTime(t.fecha)} ${t.usuario_nombre?'· '+esc(t.usuario_nombre):''}</p>
     </div>
     <div class="text-right shrink-0">
@@ -783,14 +852,14 @@ function renderTxRow(t, showActions){
     </div>
     ${showActions && admin ? `
     <div class="flex items-center gap-1 shrink-0 ml-1">
-      <button data-action="shareTx" data-id="${t.id}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors" title="Compartir">
+      <button data-action="shareTx" data-id="${t.id}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors" title="Compartir / Recibo">
         <i data-lucide="share-2" class="w-3.5 h-3.5"></i>
       </button>
       <button data-action="deleteTx" data-id="${t.id}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-300 hover:bg-red-500/10 transition-colors" title="Eliminar">
         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
       </button>
     </div>` : (showActions ? `
-    <button data-action="shareTx" data-id="${t.id}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors ml-1" title="Compartir">
+    <button data-action="shareTx" data-id="${t.id}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors ml-1" title="Compartir / Recibo">
       <i data-lucide="share-2" class="w-3.5 h-3.5"></i>
     </button>` : '')}
   </div>`;
@@ -803,7 +872,7 @@ function getCategories(){ return Array.from(new Set(DB.getProducts().map(p=>p.ca
 function getFilteredProducts(){
   const q = normalize(UI.invSearch);
   return DB.getProducts().filter(p=>{
-    const ok = !q || normalize(p.nombre).includes(q) || normalize(p.categoria).includes(q) || normalize(p.ubicacion).includes(q);
+    const ok = !q || normalize(p.codigo).includes(q) || normalize(p.nombre).includes(q) || normalize(p.categoria).includes(q) || normalize(p.ubicacion).includes(q);
     const okCat = UI.invCategory==='Todas' || p.categoria===UI.invCategory;
     return ok && okCat;
   }).sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -817,15 +886,15 @@ function renderInventoryTab(){
   <div class="space-y-4">
     <div class="flex items-center justify-between gap-3">
       <div>
-        <h2 class="text-lg font-bold text-white">Inventario</h2>
-        <p class="text-sm text-slate-500">${DB.getProducts().length} productos registrados</p>
+        <h2 class="text-lg font-bold text-white">Inventario y Stock</h2>
+        <p class="text-sm text-slate-500">${DB.getProducts().length} productos con código SKU</p>
       </div>
-      ${admin ? `<button data-action="openProductModal" class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-ink-950 font-bold text-sm px-3.5 py-2.5 rounded-xl transition-colors shrink-0"><i data-lucide="plus" class="w-4 h-4"></i><span class="hidden sm:inline">Agregar</span></button>` : ''}
+      ${admin ? `<button data-action="openProductModal" class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-ink-950 font-bold text-sm px-3.5 py-2.5 rounded-xl transition-colors shrink-0"><i data-lucide="plus" class="w-4 h-4"></i><span class="hidden sm:inline">Nuevo Producto</span></button>` : ''}
     </div>
     <div class="flex gap-2">
       <div class="relative flex-1">
         <i data-lucide="search" class="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2"></i>
-        <input id="inv-search" type="text" placeholder="Buscar por nombre o categoría…" value="${esc(UI.invSearch)}"
+        <input id="inv-search" type="text" placeholder="Buscar por código, nombre o ubicación…" value="${esc(UI.invSearch)}"
           class="w-full bg-ink-800/70 border border-slate-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder-slate-500 focus:border-amber-500 transition-colors" />
       </div>
       <select id="inv-category" class="bg-ink-800/70 border border-slate-700 rounded-xl px-2.5 py-2.5 text-sm text-white focus:border-amber-500 max-w-[9.5rem] shrink-0">
@@ -850,14 +919,14 @@ function renderProductCard(p, admin){
   const priceBs = Rate.toBs(p.precio);
   return `
   <div class="glass rounded-2xl p-4 flex flex-col ${low?'low-stock-row':''}">
-    <div class="flex items-start justify-between gap-2 mb-1.5">
+    <div class="flex items-start justify-between gap-2 mb-1">
       <div class="min-w-0">
-        <p class="font-semibold text-white text-sm truncate">${esc(p.nombre)}</p>
-        <p class="text-[11px] text-slate-500">${esc(p.categoria)}</p>
+        <span class="text-[10px] font-mono-num font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 tracking-wider">${esc(p.codigo)}</span>
+        <h3 class="font-bold text-white text-sm truncate mt-1">${esc(p.nombre)}</h3>
       </div>
       ${categoryBadge(p.categoria)}
     </div>
-    <p class="text-xs text-slate-500 line-clamp-2 mb-3 flex-1">${esc(p.descripcion||'')}</p>
+    <p class="text-xs text-slate-500 line-clamp-2 my-2 flex-1">${esc(p.descripcion||'')}</p>
     <div class="flex items-end justify-between mb-3">
       <div>
         <p class="text-lg font-extrabold font-mono-num text-white leading-none">${fmtUSD(p.precio)}</p>
@@ -875,7 +944,7 @@ function renderProductCard(p, admin){
       <button data-action="quickStock" data-id="${p.id}" data-delta="-1" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 flex items-center justify-center transition-colors" title="Restar 1"><i data-lucide="minus" class="w-3.5 h-3.5"></i></button>
       <button data-action="quickStock" data-id="${p.id}" data-delta="1" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 flex items-center justify-center transition-colors" title="Entrada +1"><i data-lucide="plus" class="w-3.5 h-3.5"></i></button>` : ''}
       <div class="flex-1"></div>
-      <button data-action="shareProduct" data-id="${p.id}" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-emerald-500/15 hover:text-emerald-300 text-slate-400 flex items-center justify-center transition-colors" title="Compartir"><i data-lucide="share-2" class="w-3.5 h-3.5"></i></button>
+      <button data-action="shareProduct" data-id="${p.id}" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-emerald-500/15 hover:text-emerald-300 text-slate-400 flex items-center justify-center transition-colors" title="Compartir Ficha"><i data-lucide="share-2" class="w-3.5 h-3.5"></i></button>
       ${admin ? `
       <button data-action="editProduct" data-id="${p.id}" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-sky-500/15 hover:text-sky-300 text-slate-400 flex items-center justify-center transition-colors" title="Editar"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
       <button data-action="deleteProduct" data-id="${p.id}" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-500/15 hover:text-red-300 text-slate-400 flex items-center justify-center transition-colors" title="Eliminar"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : ''}
@@ -912,18 +981,18 @@ function renderAccountingTab(){
   return `
   <div class="space-y-4">
     <div class="flex items-center justify-between gap-3">
-      <div><h2 class="text-lg font-bold text-white">Contabilidad</h2><p class="text-sm text-slate-500">Ventas${admin?', gastos y entradas de inventario':''}</p></div>
+      <div><h2 class="text-lg font-bold text-white">Facturación y Movimientos</h2><p class="text-sm text-slate-500">Ventas${admin?', gastos y entradas de inventario':''}</p></div>
     </div>
     <div class="grid grid-cols-${admin?3:1} gap-2">
       <button data-action="openTransactionModal" data-txtype="venta" class="glass rounded-xl py-2.5 flex flex-col items-center gap-1 hover:border-emerald-500/40 transition-colors">
-        <i data-lucide="shopping-cart" class="w-4 h-4 text-emerald-300"></i><span class="text-[11px] font-semibold text-slate-300">Venta</span>
+        <i data-lucide="shopping-cart" class="w-4 h-4 text-emerald-300"></i><span class="text-[11px] font-semibold text-slate-300">Registrar Venta</span>
       </button>
       ${admin ? `
       <button data-action="openTransactionModal" data-txtype="gasto" class="glass rounded-xl py-2.5 flex flex-col items-center gap-1 hover:border-red-500/40 transition-colors">
-        <i data-lucide="receipt" class="w-4 h-4 text-red-300"></i><span class="text-[11px] font-semibold text-slate-300">Gasto</span>
+        <i data-lucide="receipt" class="w-4 h-4 text-red-300"></i><span class="text-[11px] font-semibold text-slate-300">Registrar Gasto</span>
       </button>
       <button data-action="openTransactionModal" data-txtype="entrada_inventario" class="glass rounded-xl py-2.5 flex flex-col items-center gap-1 hover:border-sky-500/40 transition-colors">
-        <i data-lucide="package-plus" class="w-4 h-4 text-sky-300"></i><span class="text-[11px] font-semibold text-slate-300">Entrada</span>
+        <i data-lucide="package-plus" class="w-4 h-4 text-sky-300"></i><span class="text-[11px] font-semibold text-slate-300">Entrada Stock</span>
       </button>` : ''}
     </div>
     <div class="flex items-center gap-2 overflow-x-auto scrollbar-none">
@@ -978,7 +1047,7 @@ function composeLocalSummary(m){
   }
   if(topProducts&&topProducts.length){
     const top = topProducts[0];
-    p.push(`Producto de mayor movimiento: "${top.nombre}" con ${top.cantidad} unidades (${fmtUSD(top.ingresos)}).${topProducts.length>1?' Le siguieron '+topProducts.slice(1,3).map(t=>`"${t.nombre}"`).join(' y ')+'.':''}`);
+    p.push(`Producto de mayor movimiento: [${top.codigo||'SKU'}] "${top.nombre}" con ${top.cantidad} unidades (${fmtUSD(top.ingresos)}).${topProducts.length>1?' Le siguieron '+topProducts.slice(1,3).map(t=>`[${t.codigo||'SKU'}] "${t.nombre}"`).join(' y ')+'.':''}`);
   }
   if(lowStockAlerts&&lowStockAlerts.length){
     p.push(`Atención: ${lowStockAlerts.length} producto(s) en o por debajo del stock mínimo. Planificar reabastecimiento.`);
@@ -999,15 +1068,15 @@ async function generateReport(dateStr){
       (t.items||[]).forEach(it=>{
         totalCostOfSales += Number(it.costo||0) * Number(it.cantidad||0);
         const k = it.nombre;
-        if(!itemMap[k]) itemMap[k] = {qty:0,rev:0};
+        if(!itemMap[k]) itemMap[k] = {nombre:it.nombre, codigo:it.codigo||'', qty:0, rev:0};
         itemMap[k].qty += Number(it.cantidad||0);
         itemMap[k].rev += Number(it.precio||0)*Number(it.cantidad||0);
       });
     } else if(t.tipo==='gasto'){ totalExpenses += Number(t.total||0); }
   });
   const netProfit = totalSales - totalCostOfSales - totalExpenses;
-  const topProducts = Object.entries(itemMap).map(([nombre,d])=>({nombre,cantidad:d.qty,ingresos:d.rev})).sort((a,b)=>b.cantidad-a.cantidad).slice(0,5);
-  const lowStockAlerts = getLowStock(DB.getProducts()).map(p=>`${p.nombre} (stock:${p.stock}/mín:${p.stock_min})`);
+  const topProducts = Object.values(itemMap).map(d=>({nombre:d.nombre,codigo:d.codigo,cantidad:d.qty,ingresos:d.rev})).sort((a,b)=>b.cantidad-a.cantidad).slice(0,5);
+  const lowStockAlerts = getLowStock(DB.getProducts()).map(p=>`[${p.codigo}] ${p.nombre} (stock:${p.stock}/mín:${p.stock_min})`);
   const metrics = {date:dateStr,totalSales,totalCostOfSales,totalExpenses,netProfit,salesCount,topProducts,lowStockAlerts};
   let summary = composeLocalSummary(metrics);
   let source = 'local';
@@ -1036,12 +1105,12 @@ function renderReportsTab(){
   const reports = [...DB.getReports()].sort((a,b)=>b.fecha.localeCompare(a.fecha));
   return `
   <div class="space-y-4">
-    <div><h2 class="text-lg font-bold text-white">Reportes diarios</h2><p class="text-sm text-slate-500">Análisis automático de cierre de caja</p></div>
+    <div><h2 class="text-lg font-bold text-white">Reportes y Resumen Ejecutivo</h2><p class="text-sm text-slate-500">Análisis detallado y balance de cierre</p></div>
     ${admin ? `
     <div class="glass rounded-2xl p-4 flex items-center gap-2.5 flex-wrap">
       <input id="report-date" type="date" value="${esc(UI.reportDate)}" max="${todayStr()}" class="bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white flex-1 min-w-[140px]" />
       <button data-action="generateReport" ${UI.generatingReport?'disabled':''} class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-ink-950 font-bold text-sm px-4 py-2.5 rounded-xl transition-colors">
-        ${UI.generatingReport ? `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Generando…` : `<i data-lucide="sparkles" class="w-4 h-4"></i> Generar reporte`}
+        ${UI.generatingReport ? `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Generando…` : `<i data-lucide="sparkles" class="w-4 h-4"></i> Generar Reporte`}
       </button>
     </div>` : ''}
     <div class="space-y-3">
@@ -1064,7 +1133,7 @@ function renderReportCard(r){
       <div class="bg-white/5 rounded-lg py-2"><p class="text-[10px] text-slate-500">Costo</p><p class="text-sm font-bold font-mono-num text-slate-300">${fmtUSD(r.total_costo_ventas)}</p></div>
       <div class="bg-white/5 rounded-lg py-2"><p class="text-[10px] text-slate-500">Gastos</p><p class="text-sm font-bold font-mono-num text-red-300">${fmtUSD(r.total_gastos)}</p></div>
     </div>
-    ${r.top_productos&&r.top_productos.length ? `<div class="flex flex-wrap gap-1.5 mb-3">${(r.top_productos||[]).slice(0,3).map(tp=>`<span class="badge bg-white/5 text-slate-300 ring-1 ring-white/10">${esc(tp.nombre)} ×${tp.cantidad}</span>`).join('')}</div>` : ''}
+    ${r.top_productos&&r.top_productos.length ? `<div class="flex flex-wrap gap-1.5 mb-3">${(r.top_productos||[]).slice(0,3).map(tp=>`<span class="badge bg-white/5 text-slate-300 ring-1 ring-white/10 font-mono-num">[${esc(tp.codigo||'SKU')}] ${esc(tp.nombre)} ×${tp.cantidad}</span>`).join('')}</div>` : ''}
     <p class="text-xs text-slate-400 leading-relaxed whitespace-pre-line">${esc(r.resumen)}</p>
     <div class="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
       <span class="text-[10px] text-slate-600 flex items-center gap-1">${r.fuente_resumen==='gemini'?'<i data-lucide="sparkles" class="w-3 h-3"></i> Resumen con IA':'<i data-lucide="cpu" class="w-3 h-3"></i> Resumen automático'}</span>
@@ -1226,55 +1295,87 @@ function renderModal(){
 }
 function closeModal(){ UI.modal=null; renderApp(); }
 
-/* ---- Modal: Producto (solo admin) ---- */
+/* ---- Modal: Producto (solo admin) con Auto-Generación de Código SKU ---- */
 function renderProductModal(p){
   const editing = !!(p&&p.id);
-  p = p || {nombre:'',descripcion:'',categoria:'',precio:'',costo:'',stock:0,stock_min:5,ubicacion:''};
+  p = p || {codigo:'',nombre:'',descripcion:'',categoria:'',precio:'',costo:'',stock:0,stock_min:5,ubicacion:''};
   const categories = getCategories();
   const body = `
   <form id="product-form" data-form="product" data-id="${editing?p.id:''}" class="space-y-3">
+    
     <div>
-      <label class="text-xs text-slate-400 block mb-1">Nombre del producto</label>
-      <input name="nombre" required value="${esc(p.nombre)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="EJ: PINTURA LÁTEX BLANCO HUESO 1 GAL" />
+      <label class="text-xs text-slate-400 block mb-1">Nombre del producto y presentación</label>
+      <input name="nombre" id="product-name-input" required value="${esc(p.nombre)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="EJ: PINTURA LATEX INTERIOR VP BLANCO HUESO 1 GAL" />
     </div>
+
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="text-xs text-slate-400 block mb-1">Categoría</label>
-        <input name="categoria" list="category-options" required value="${esc(p.categoria)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="PINTURAS LÁTEX" />
+        <input name="categoria" id="product-cat-input" list="category-options" required value="${esc(p.categoria)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="PINTURAS LATEX" />
         <datalist id="category-options">${categories.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
       </div>
+
       <div>
-        <label class="text-xs text-slate-400 block mb-1">Ubicación</label>
-        <input name="ubicacion" required value="${esc(p.ubicacion)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="ESTANTE A-1" />
+        <label class="text-xs text-slate-400 block mb-1 flex items-center justify-between">
+          <span>Código SKU</span>
+          <span class="text-[10px] text-amber-400 font-semibold cursor-pointer" onclick="triggerAutoCodeGen()">Auto-Generar</span>
+        </label>
+        <div class="flex gap-1">
+          <input name="codigo" id="product-code-input" required value="${esc(p.codigo)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500 tracking-wider" placeholder="LAT-BLA-GAL-101" />
+          <button type="button" onclick="triggerAutoCodeGen()" class="px-2.5 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 rounded-xl transition-colors shrink-0" title="Auto-generar código según categoría, objeto y tipo">
+            <i data-lucide="wand-2" class="w-4 h-4"></i>
+          </button>
+        </div>
       </div>
     </div>
+
     <div>
-      <label class="text-xs text-slate-400 block mb-1">Descripción</label>
+      <label class="text-xs text-slate-400 block mb-1">Ubicación en tienda</label>
+      <input name="ubicacion" required value="${esc(p.ubicacion)}" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="ESTANTE A-1" />
+    </div>
+
+    <div>
+      <label class="text-xs text-slate-400 block mb-1">Descripción corta</label>
       <textarea name="descripcion" rows="2" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500 resize-none">${esc(p.descripcion)}</textarea>
     </div>
+
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="text-xs text-slate-400 block mb-1">Precio de venta (USD)</label>
         <input name="precio" type="number" step="0.01" min="0" required value="${p.precio||''}" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500" />
       </div>
       <div>
-        <label class="text-xs text-slate-400 block mb-1">Costo (USD)</label>
+        <label class="text-xs text-slate-400 block mb-1">Costo de compra (USD)</label>
         <input name="costo" type="number" step="0.01" min="0" required value="${p.costo||''}" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500" />
       </div>
     </div>
+
     <div class="grid grid-cols-2 gap-3">
       <div>
-        <label class="text-xs text-slate-400 block mb-1">Stock actual</label>
+        <label class="text-xs text-slate-400 block mb-1">Stock inicial</label>
         <input name="stock" type="number" min="0" required value="${p.stock}" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500" />
       </div>
       <div>
-        <label class="text-xs text-slate-400 block mb-1">Stock mínimo</label>
+        <label class="text-xs text-slate-400 block mb-1">Stock mínimo de alerta</label>
         <input name="stock_min" type="number" min="0" required value="${p.stock_min}" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500" />
       </div>
     </div>
   </form>`;
   const footer = `<button form="product-form" type="submit" class="w-full bg-amber-500 hover:bg-amber-400 text-ink-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> ${editing?'Guardar cambios':'Agregar producto'}</button>`;
-  return modalShell(editing?'Editar producto':'Nuevo producto','package',body,footer);
+  return modalShell(editing?'Editar producto':'Nuevo producto en inventario','package',body,footer);
+}
+
+function triggerAutoCodeGen() {
+  const catInput = document.getElementById('product-cat-input');
+  const nameInput = document.getElementById('product-name-input');
+  const codeInput = document.getElementById('product-code-input');
+  if(!catInput || !nameInput || !codeInput) return;
+
+  const cat = catInput.value.trim();
+  const name = nameInput.value.trim();
+  const generated = generateProductCode(cat, name, codeInput.value);
+  codeInput.value = generated;
+  toast(`Código generado: ${generated}`, 'info');
 }
 
 /* ---- Modal: Transacción ---- */
@@ -1311,7 +1412,7 @@ function renderTransactionModal(txType, data){
         <label class="text-xs text-slate-400 block mb-1">Producto</label>
         <select name="productId" id="entry-product-select" required class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500">
           <option value="">Selecciona un producto…</option>
-          ${products.map(p=>`<option value="${p.id}" data-cost="${p.costo}">${esc(p.nombre)} — stock ${p.stock}</option>`).join('')}
+          ${products.map(p=>`<option value="${p.id}" data-cost="${p.costo}">[${esc(p.codigo)}] ${esc(p.nombre)} — stock ${p.stock}</option>`).join('')}
         </select>
       </div>
       <div class="grid grid-cols-2 gap-3">
@@ -1334,10 +1435,10 @@ function renderTransactionModal(txType, data){
   const body = `
   <form id="tx-form" data-form="sale-tx" class="space-y-3">
     <div>
-      <label class="text-xs text-slate-400 block mb-1">Producto</label>
+      <label class="text-xs text-slate-400 block mb-1">Producto a facturar</label>
       <select name="productId" id="sale-product-select" required class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500">
-        <option value="">Selecciona un producto…</option>
-        ${products.map(p=>`<option value="${p.id}" data-price="${p.precio}" data-cost="${p.costo}" data-stock="${p.stock}" ${p.stock<=0?'disabled':''}>${esc(p.nombre)} — ${fmtUSD(p.precio)} · stock ${p.stock}</option>`).join('')}
+        <option value="">Selecciona un producto por nombre o código SKU…</option>
+        ${products.map(p=>`<option value="${p.id}" data-code="${esc(p.codigo)}" data-price="${p.precio}" data-cost="${p.costo}" data-stock="${p.stock}" ${p.stock<=0?'disabled':''}>[${esc(p.codigo)}] ${esc(p.nombre)} — ${fmtUSD(p.precio)} · stock ${p.stock}</option>`).join('')}
       </select>
     </div>
     <div>
@@ -1346,7 +1447,7 @@ function renderTransactionModal(txType, data){
     </div>
     <div>
       <label class="text-xs text-slate-400 block mb-1">Nota (opcional)</label>
-      <input name="descripcion" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="SE AUTOCOMPLETA CON EL NOMBRE DEL PRODUCTO" />
+      <input name="descripcion" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="SE AUTOCOMPLETA CON EL NOMBRE Y SKU DEL PRODUCTO" />
     </div>
     <div class="bg-white/5 rounded-xl p-3 flex items-center justify-between">
       <span class="text-xs text-slate-400">Total estimado</span>
@@ -1354,7 +1455,7 @@ function renderTransactionModal(txType, data){
     </div>
     <p class="text-[11px] text-slate-500">Vendedor: ${esc(user.nombre)}</p>
   </form>`;
-  const footer = `<button form="tx-form" type="submit" class="w-full bg-emerald-500 hover:bg-emerald-400 text-ink-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2"><i data-lucide="shopping-cart" class="w-4 h-4"></i> Registrar venta</button>`;
+  const footer = `<button form="tx-form" type="submit" class="w-full bg-emerald-500 hover:bg-emerald-400 text-ink-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2"><i data-lucide="shopping-cart" class="w-4 h-4"></i> Facturar / Registrar Venta</button>`;
   return modalShell('Registrar venta','shopping-cart',body,footer);
 }
 
@@ -1390,6 +1491,29 @@ function renderUserModal(u){
 function wireModalEvents(){
   const m = UI.modal;
   if(!m) return;
+
+  if(m.type==='product'){
+    const catInput = document.getElementById('product-cat-input');
+    const nameInput = document.getElementById('product-name-input');
+    const codeInput = document.getElementById('product-code-input');
+    
+    // Auto-generación dinámica al escribir si el código está vacío o es un draft nuevo
+    if(!m.data || !m.data.id){
+      const autoUpdateCode = () => {
+        if(!codeInput) return;
+        const cat = catInput ? catInput.value.trim() : '';
+        const name = nameInput ? nameInput.value.trim() : '';
+        if(cat && name && (!codeInput.value || codeInput.dataset.autoGenerated === 'true')) {
+          codeInput.value = generateProductCode(cat, name, codeInput.value);
+          codeInput.dataset.autoGenerated = 'true';
+        }
+      };
+      if(catInput) catInput.addEventListener('change', autoUpdateCode);
+      if(nameInput) nameInput.addEventListener('blur', autoUpdateCode);
+      if(codeInput) codeInput.addEventListener('input', () => { codeInput.dataset.autoGenerated = 'false'; });
+    }
+  }
+
   if(m.type==='transaction' && m.txType==='venta'){
     const sel = document.getElementById('sale-product-select');
     const qty = document.getElementById('sale-qty');
@@ -1399,14 +1523,16 @@ function wireModalEvents(){
       const opt = sel.options[sel.selectedIndex];
       const price = opt ? Number(opt.dataset.price||0) : 0;
       const stock = opt ? Number(opt.dataset.stock||0) : Infinity;
+      const code = opt ? opt.dataset.code : '';
       const q = Math.max(1, Number(qty.value||1));
       const total = price*q;
       if(preview) preview.textContent = sel.value ? `${fmtUSD(total)} · ${fmtBs(Rate.toBs(total))}` : '—';
-      if(sel.value && desc && !desc.dataset.userEdited){ desc.value = 'VENTA DE '+opt.text.split(' — ')[0]; }
+      if(sel.value && desc && !desc.dataset.userEdited){ desc.value = `VENTA DE [${code}] ${opt.text.split(' — ')[0].replace(/^\[.*?\]\s*/,'')}`; }
       if(preview){ preview.classList.toggle('text-red-400', sel.value && q>stock); preview.classList.toggle('text-emerald-300', !sel.value || q<=stock); }
     };
     if(sel){ sel.addEventListener('change',update); qty.addEventListener('input',update); if(desc) desc.addEventListener('input',()=>desc.dataset.userEdited='1'); update(); }
   }
+
   if(m.type==='transaction' && m.txType==='entrada_inventario'){
     const sel = document.getElementById('entry-product-select');
     const qty = document.getElementById('entry-qty');
@@ -1423,7 +1549,7 @@ function wireModalEvents(){
 }
 
 /* =========================================================================
-   MOTOR DE VOZ — 100% local, sin IA externa requerida
+   MOTOR DE VOZ — 100% local
    ========================================================================= */
 const SPANISH_NUMBERS = {cero:0,un:1,uno:1,una:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12,trece:13,catorce:14,quince:15,dieciseis:16,diecisiete:17,dieciocho:18,diecinueve:19,veinte:20,veintiuno:21,veintidos:22,veintitres:23,veinticuatro:24,veinticinco:25,veintiseis:26,treinta:30,cuarenta:40,cincuenta:50,sesenta:60,setenta:70,ochenta:80,noventa:90,cien:100};
 function extractQuantity(norm){ const m=norm.match(/\d+/); if(m) return parseInt(m[0],10); const words=norm.split(' '); for(const w of words){ if(SPANISH_NUMBERS[w]!==undefined) return SPANISH_NUMBERS[w]; } return null; }
@@ -1433,9 +1559,11 @@ function matchProducts(norm){
   const scored = [];
   for(const p of products){
     let score = 0;
+    const nCode = normalize(p.codigo);
     const nName = normalize(p.nombre);
     const nCat = normalize(p.categoria);
-    if(norm.includes(nName)) score = 80;
+    if(norm.includes(nCode)) score = 100;
+    else if(norm.includes(nName)) score = 80;
     else {
       const words = nName.split(' ').filter(w=>w.length>=4);
       const catWords = nCat.split(' ').filter(w=>w.length>=4);
@@ -1449,10 +1577,10 @@ function matchProducts(norm){
   return scored.sort((a,b)=>b.score-a.score).slice(0,5);
 }
 
-const SALE_WORDS = ['vender','vendi','vendimos','venda','vendo','despachar','despacho','sali','salio','salida de','cobrar'];
+const SALE_WORDS = ['vender','vendi','vendimos','venda','vendo','despachar','despacho','sali','salio','salida de','cobrar','facturar'];
 const ENTRY_WORDS = ['entrar','entrada','entro','recibir','recibi','cargar','cargue','reabastecer','reponer','comprar','compre','ingresar','ingreso','sumar stock','agregar stock'];
 const ACCOUNTING_WORDS = ['cuanto vendimos','ventas del dia','venta del dia','ganancia','ganancias','utilidad','cuanto hemos vendido','resumen del dia','como va la caja','cuanto llevamos','estado de cuentas','finanzas','balance'];
-const STOCK_QUERY = ['tenemos','hay','tienes','disponible','existencia','cuanto queda','cuantos quedan','donde esta','donde se','ubicacion','precio de','cuanto cuesta','cuesta','stock de'];
+const STOCK_QUERY = ['tenemos','hay','tienes','disponible','existencia','cuanto queda','cuantos quedan','donde esta','donde se','ubicacion','precio de','cuanto cuesta','cuesta','stock de','codigo de'];
 
 function detectIntent(norm){
   if(ACCOUNTING_WORDS.some(w=>norm.includes(w))) return 'accounting_status';
@@ -1483,11 +1611,11 @@ function processVoiceQuery(rawQuery){
 
   if(intent==='sale_action'){
     const best = matches[0];
-    if(!best) return {kind:'unknown', answer:'Entendí que quieres registrar una venta, pero no identifiqué el producto. Intenta mencionar su nombre, ej: **"vender 3 brochas"**.', spokenAnswer:'No identifiqué el producto. Intenta de nuevo mencionando su nombre.', matches:[], pending:null};
+    if(!best) return {kind:'unknown', answer:'Entendí que quieres registrar una venta, pero no identifiqué el producto. Intenta mencionar su nombre o código SKU, ej: **"vender 3 brochas"**.', spokenAnswer:'No identifiqué el producto. Intenta de nuevo mencionando su nombre o código.', matches:[], pending:null};
     const p = best.product;
-    if(p.stock < qty) return {kind:'search_product', answer:`No puedo registrar la venta de **${qty}** unidades de **${p.nombre}** porque solo quedan **${p.stock}**.`, spokenAnswer:`No hay suficiente existencia. Solo quedan ${p.stock} unidades de ${p.nombre}.`, matches:[{product:p}], pending:null};
+    if(p.stock < qty) return {kind:'search_product', answer:`No puedo registrar la venta de **${qty}** unidades de **[${p.codigo}] ${p.nombre}** porque solo quedan **${p.stock}**.`, spokenAnswer:`No hay suficiente existencia. Solo quedan ${p.stock} unidades de ${p.nombre}.`, matches:[{product:p}], pending:null};
     const total = p.precio*qty;
-    return {kind:'confirm_sale', answer:`¿Confirmas la venta de **${qty} unidad(es)** de **${p.nombre}** por **${fmtUSD(total)}** (${fmtBs(Rate.toBs(total))})?`, spokenAnswer:`¿Confirmas la venta de ${qty} unidades de ${p.nombre} por ${total.toFixed(2)} dólares?`, matches:[{product:p}], pending:{type:'venta',productId:p.id,productName:p.nombre,quantity:qty,total}};
+    return {kind:'confirm_sale', answer:`¿Confirmas la venta de **${qty} unidad(es)** de **[${p.codigo}] ${p.nombre}** por **${fmtUSD(total)}** (${fmtBs(Rate.toBs(total))})?`, spokenAnswer:`¿Confirmas la venta de ${qty} unidades de ${p.nombre} por ${total.toFixed(2)} dólares?`, matches:[{product:p}], pending:{type:'venta',productId:p.id,productName:p.nombre,productCode:p.codigo,quantity:qty,total}};
   }
 
   if(intent==='entry_action'){
@@ -1495,18 +1623,18 @@ function processVoiceQuery(rawQuery){
     if(best){
       const p = best.product;
       const totalCost = p.costo*qty;
-      return {kind:'confirm_entry', answer:`¿Confirmas agregar **${qty} unidad(es)** de **${p.nombre}** al inventario (costo est. ${fmtUSD(totalCost)})?`, spokenAnswer:`¿Confirmas agregar ${qty} unidades de ${p.nombre} al inventario?`, matches:[{product:p}], pending:{type:'entrada_inventario',productId:p.id,productName:p.nombre,quantity:qty,totalCost}};
+      return {kind:'confirm_entry', answer:`¿Confirmas agregar **${qty} unidad(es)** de **[${p.codigo}] ${p.nombre}** al inventario (costo est. ${fmtUSD(totalCost)})?`, spokenAnswer:`¿Confirmas agregar ${qty} unidades de ${p.nombre} al inventario?`, matches:[{product:p}], pending:{type:'entrada_inventario',productId:p.id,productName:p.nombre,productCode:p.codigo,quantity:qty,totalCost}};
     }
-    return {kind:'unknown', answer:'Entendí que quieres registrar una entrada de inventario, pero no identifiqué el producto. Abre el formulario desde **Cuentas → Entrada**.', spokenAnswer:'No identifiqué el producto para la entrada. Usa el formulario manual.', matches:[], pending:null};
+    return {kind:'unknown', answer:'Entendí que quieres registrar una entrada de inventario, pero no identifiqué el producto. Abre el formulario desde **Cuentas → Entrada Stock**.', spokenAnswer:'No identifiqué el producto para la entrada. Usa el formulario manual.', matches:[], pending:null};
   }
 
   if(intent==='stock_query' || matches.length){
     if(matches.length){
       const p = matches[0].product;
       const priceBs = Rate.toBs(p.precio);
-      return {kind:'search_product', answer:`Sí, tenemos **${p.nombre}**. Quedan **${p.stock} unidades** en **${p.ubicacion}**, a **${fmtUSD(p.precio)}** (${fmtBs(priceBs)}) c/u.`, spokenAnswer:`Del producto ${p.nombre} quedan ${p.stock} unidades en ${p.ubicacion}. El precio es de ${p.precio.toFixed(2)} dólares.`, matches, pending:null};
+      return {kind:'search_product', answer:`Sí, tenemos **[${p.codigo}] ${p.nombre}**. Quedan **${p.stock} unidades** en **${p.ubicacion}**, a **${fmtUSD(p.precio)}** (${fmtBs(priceBs)}) c/u.`, spokenAnswer:`Del producto ${p.nombre} quedan ${p.stock} unidades en ${p.ubicacion}. El precio es de ${p.precio.toFixed(2)} dólares.`, matches, pending:null};
     }
-    return {kind:'unknown', answer:`No encontré productos que coincidan con "${esc(rawQuery)}". Prueba con el nombre exacto.`, spokenAnswer:'No encontré ese producto. Intenta con otro nombre.', matches:[], pending:null};
+    return {kind:'unknown', answer:`No encontré productos que coincidan con "${esc(rawQuery)}". Prueba con el código SKU o nombre exacto.`, spokenAnswer:'No encontré ese producto. Intenta con otro nombre o código.', matches:[], pending:null};
   }
 
   return {kind:'unknown', answer:`No entendí la consulta: **"${esc(rawQuery)}"**. Prueba: "¿tenemos pintura blanca?", "vender 2 brochas" o "¿cuánto vendimos hoy?".`, spokenAnswer:'No logré entender la consulta. Intenta con otra frase.', matches:[], pending:null};
@@ -1520,11 +1648,11 @@ async function commitPendingVoiceAction(pending){
       if(!p || p.stock<pending.quantity){ toast('El stock cambió, no es posible completar esta venta.','error'); return false; }
       await DB.saveTransaction({
         tipo:'venta', fecha:new Date().toISOString(),
-        descripcion:`VENTA POR VOZ DE ${p.nombre}`, categoria:'VENTAS', total:p.precio*pending.quantity,
-        items:[{producto_id:p.id, nombre:p.nombre, cantidad:pending.quantity, precio:p.precio, costo:p.costo}],
+        descripcion:`VENTA POR VOZ DE [${p.codigo}] ${p.nombre}`, categoria:'VENTAS', total:p.precio*pending.quantity,
+        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad:pending.quantity, precio:p.precio, costo:p.costo}],
         usuario_id:user.id||null, usuario_nombre:user.nombre+' (VOZ)',
       });
-      toast(`Venta registrada: ${pending.quantity}× ${p.nombre}`,'success');
+      toast(`Venta registrada: ${pending.quantity}× [${p.codigo}] ${p.nombre}`,'success');
       return true;
     }
     if(pending.type==='entrada_inventario'){
@@ -1532,11 +1660,11 @@ async function commitPendingVoiceAction(pending){
       if(!p) return false;
       await DB.saveTransaction({
         tipo:'entrada_inventario', fecha:new Date().toISOString(),
-        descripcion:`ENTRADA POR VOZ DE ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:p.costo*pending.quantity,
-        items:[{producto_id:p.id, nombre:p.nombre, cantidad:pending.quantity, precio:p.precio, costo:p.costo}],
+        descripcion:`ENTRADA POR VOZ DE [${p.codigo}] ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:p.costo*pending.quantity,
+        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad:pending.quantity, precio:p.precio, costo:p.costo}],
         usuario_id:user.id||null, usuario_nombre:user.nombre+' (VOZ)',
       });
-      toast(`Inventario actualizado: +${pending.quantity} ${p.nombre}`,'success');
+      toast(`Inventario actualizado: +${pending.quantity} [${p.codigo}] ${p.nombre}`,'success');
       return true;
     }
   }catch(e){ toast('Error al procesar la acción: '+e.message,'error'); }
@@ -1582,7 +1710,7 @@ function renderVoicePanel(){
         <div class="rise-in bg-sky-500/5 border border-sky-500/20 rounded-xl p-4">
           <p class="text-[10px] uppercase tracking-wide text-sky-300/80 font-semibold mb-1.5">Respuesta</p>
           <p class="text-sm text-slate-200 leading-relaxed whitespace-pre-line">${formatVoiceAnswer(r.answer)}</p>
-          ${r.matches&&r.matches.length ? `<div class="flex flex-wrap gap-1.5 mt-3">${r.matches.map(m=>`<button data-action="voiceGoToProduct" data-id="${m.product.id}" class="badge bg-white/10 text-slate-200 hover:bg-white/20 transition-colors cursor-pointer">${esc(m.product.nombre)} · ${m.product.stock}u.</button>`).join('')}</div>` : ''}
+          ${r.matches&&r.matches.length ? `<div class="flex flex-wrap gap-1.5 mt-3">${r.matches.map(m=>`<button data-action="voiceGoToProduct" data-id="${m.product.id}" class="badge bg-white/10 text-slate-200 hover:bg-white/20 transition-colors cursor-pointer font-mono-num">[${esc(m.product.codigo)}] ${esc(m.product.nombre)} · ${m.product.stock}u.</button>`).join('')}</div>` : ''}
           ${r.pending ? `
           <div class="flex gap-2 mt-3.5 pt-3 border-t border-white/10">
             <button data-action="confirmVoiceAction" class="flex-1 bg-emerald-500 hover:bg-emerald-400 text-ink-950 font-bold text-sm py-2.5 rounded-xl transition-colors flex items-center justify-center gap-1.5"><i data-lucide="check" class="w-4 h-4"></i> Confirmar</button>
@@ -1595,7 +1723,6 @@ function renderVoicePanel(){
 }
 function formatVoiceAnswer(a){ return esc(a||'').replace(/\*\*(.+?)\*\*/g,'<b class="text-white">$1</b>'); }
 
-/* ---- Speech API ---- */
 let recognition = null;
 function setupSpeechRecognition(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1653,7 +1780,7 @@ function closeVoice(){ if(recognition&&UI.voice.listening){ try{ recognition.sto
 function submitVoiceText(query){ UI.voice.transcript=query; handleVoiceQuery(query); }
 async function confirmVoiceAction(){ const r=UI.voice.lastResult; if(!r||!r.pending) return; const ok=await commitPendingVoiceAction(r.pending); if(ok) closeVoice(); }
 function cancelVoiceAction(){ UI.voice.lastResult=null; refreshVoicePanel(); }
-function voiceGoToProduct(id){ const p=DB.getProducts().find(x=>x.id===id); closeVoice(); UI.activeTab='inventario'; UI.invSearch=p?p.nombre:''; renderApp(); }
+function voiceGoToProduct(id){ const p=DB.getProducts().find(x=>x.id===id); closeVoice(); UI.activeTab='inventario'; UI.invSearch=p?p.codigo||p.nombre:''; renderApp(); }
 
 /* ---- Gemini (opcional) ---- */
 async function geminiCall(prompt){
@@ -1675,7 +1802,7 @@ async function callGeminiVoiceAnswer(query, result){
   return parsed;
 }
 async function callGeminiReportSummary(m){
-  const prompt = `Genera un resumen ejecutivo profesional en español (3-4 párrafos, texto fluido, sin markdown ni títulos) para el cierre diario de una tienda de pinturas venezolana llamada "Pinturas Valle Fresco 230".\nDatos del día ${m.date}: ventas $${m.totalSales.toFixed(2)}, costo de ventas $${m.totalCostOfSales.toFixed(2)}, gastos $${m.totalExpenses.toFixed(2)}, utilidad $${m.netProfit.toFixed(2)}, ventas registradas: ${m.salesCount}.\nTop productos: ${JSON.stringify(m.topProducts)}.\nStock bajo: ${m.lowStockAlerts.length?m.lowStockAlerts.join('; '):'ninguno'}.\nTono directo, profesional. No inventes cifras.`;
+  const prompt = `Genera un resumen ejecutivo profesional en español (3-4 párrafos, texto fluido, sin markdown ni títulos) para el cierre diario de una tienda de pinturas venezolana llamada "Pinturas Valle Fresco 230".\nDatos del día ${m.date}: ventas $${m.totalSales.toFixed(2)}, costo de ventas $${m.totalCostOfSales.toFixed(2)}, gastos $${m.totalExpenses.toFixed(2)}, utilidad $${m.netProfit.toFixed(2)}, ventas registradas: ${m.salesCount}.\nTop productos con sus SKU: ${JSON.stringify(m.topProducts)}.\nStock bajo: ${m.lowStockAlerts.length?m.lowStockAlerts.join('; '):'ninguno'}.\nTono directo, profesional. No inventes cifras.`;
   return await geminiCall(prompt);
 }
 
@@ -1688,7 +1815,7 @@ async function deleteProductAction(id){
   if(!isAdmin(Session.get())) return;
   const p = DB.getProducts().find(x=>x.id===id);
   if(!p) return;
-  const ok = await askConfirm('Eliminar producto',`¿Eliminar "${p.nombre}" del inventario? Esta acción no se puede deshacer.`,'Eliminar',true);
+  const ok = await askConfirm('Eliminar producto',`¿Eliminar "${p.nombre}" (${p.codigo}) del inventario? Esta acción no se puede deshacer.`,'Eliminar',true);
   if(ok){ try{ await DB.deleteProduct(id); toast('Producto eliminado.','info'); refreshProductList(); }catch(e){ toast('Error al eliminar: '+e.message,'error'); } }
 }
 async function quickStock(id, delta){
@@ -1700,15 +1827,15 @@ async function quickStock(id, delta){
     if(delta>0){
       await DB.saveTransaction({
         tipo:'entrada_inventario', fecha:new Date().toISOString(),
-        descripcion:`ENTRADA RÁPIDA: ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:p.costo*delta,
-        items:[{producto_id:p.id,nombre:p.nombre,cantidad:delta,precio:p.precio,costo:p.costo}],
+        descripcion:`ENTRADA RÁPIDA: [${p.codigo}] ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:p.costo*delta,
+        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad:delta, precio:p.precio, costo:p.costo}],
         usuario_id:user.id||null, usuario_nombre:user.nombre,
       });
-      toast(`+${delta} unidad(es) de ${p.nombre}`,'success');
+      toast(`+${delta} u. a [${p.codigo}] ${p.nombre}`,'success');
     } else {
       if(p.stock<=0){ toast('El stock ya está en cero.','error'); return; }
       await DB.updateProductStock(id, delta);
-      toast(`Corrección de stock: ${p.nombre} → ${Math.max(0,p.stock+delta)} u.`,'info');
+      toast(`Corrección stock: [${p.codigo}] ${p.nombre} → ${Math.max(0,p.stock+delta)} u.`,'info');
     }
     refreshProductList();
   }catch(e){ toast('Error actualizando stock: '+e.message,'error'); }
@@ -1717,13 +1844,12 @@ function shareProduct(id){
   const p = DB.getProducts().find(x=>x.id===id);
   if(!p) return;
   const priceBs = Rate.toBs(p.precio);
-  const text = `🎨 *PINTURAS VALLE FRESCO 230, S.R.L*\nRIF: J-30322893-3\n\n📌 *Producto:* ${p.nombre}\n📁 *Categoría:* ${p.categoria}\n📍 *Ubicación:* ${p.ubicacion}\n\n💵 *Precio:* ${fmtUSD(p.precio)} / *${fmtBs(priceBs)}*\n📦 *Disponibilidad:* ${p.stock>0?`✅ ${p.stock} unidades`:'❌ Agotado'}\n\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
+  const text = `🎨 *PINTURAS VALLE FRESCO 230, S.R.L*\nRIF: J-30322893-3\n\n📌 *Código SKU:* ${p.codigo}\n🏷️ *Producto:* ${p.nombre}\n📁 *Categoría:* ${p.categoria}\n📍 *Ubicación:* ${p.ubicacion}\n\n💵 *Precio:* ${fmtUSD(p.precio)} / *${fmtBs(priceBs)}*\n📦 *Disponibilidad:* ${p.stock>0?`✅ ${p.stock} unidades`:'❌ Agotado'}\n\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
   window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');
 }
 
 function openTransactionModal(txType){
   const user = Session.get();
-  // Vendedores solo pueden registrar ventas
   if(!isAdmin(user) && txType !== 'venta'){ toast('Solo los administradores pueden registrar gastos y entradas.','error'); return; }
   UI.modal={type:'transaction',txType:txType,data:null}; renderApp();
 }
@@ -1737,8 +1863,8 @@ function shareTx(id){
   const t = DB.getTransactions().find(x=>x.id===id);
   if(!t) return;
   const isSale = t.tipo==='venta';
-  const items = t.items ? t.items.map(i=>`• ${i.cantidad}× ${i.nombre} (${fmtUSD(i.precio)} c/u)`).join('\n') : '';
-  const text = `🧾 *COMPROBANTE - PINTURAS VALLE FRESCO 230*\n\n📋 *Tipo:* ${isSale?'Venta':(t.tipo==='gasto'?'Gasto':'Entrada de inventario')}\n📅 *Fecha:* ${fmtDateTime(t.fecha)}\n👤 *Atendido por:* ${t.usuario_nombre||'Sistema'}\n\n📝 ${t.descripcion}\n${items}\n\n💰 *TOTAL:* ${fmtUSD(t.total)} / *${fmtBs(Rate.toBs(t.total))}*\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
+  const items = t.items ? t.items.map(i=>`• ${i.cantidad}× [${i.codigo||'SKU'}] ${i.nombre} (${fmtUSD(i.precio)} c/u)`).join('\n') : '';
+  const text = `🧾 *COMPROBANTE DE FACTURACIÓN - PINTURAS VALLE FRESCO 230*\n\n📋 *Tipo:* ${isSale?'Venta':(t.tipo==='gasto'?'Gasto':'Entrada de inventario')}\n📅 *Fecha:* ${fmtDateTime(t.fecha)}\n👤 *Atendido por:* ${t.usuario_nombre||'Sistema'}\n\n📝 ${t.descripcion}\n${items}\n\n💰 *TOTAL:* ${fmtUSD(t.total)} / *${fmtBs(Rate.toBs(t.total))}*\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
   window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');
 }
 
@@ -1797,7 +1923,7 @@ function shareApp(){
 function shareReport(id){
   const r = DB.getReports().find(x=>x.id===id);
   if(!r) return;
-  const top = (r.top_productos||[]).map(p=>`• ${p.nombre}: ${p.cantidad}u ($${(p.ingresos||0).toFixed(2)})`).join('\n') || 'Sin ventas';
+  const top = (r.top_productos||[]).map(p=>`• [${p.codigo||'SKU'}] ${p.nombre}: ${p.cantidad}u ($${(p.ingresos||0).toFixed(2)})`).join('\n') || 'Sin ventas';
   const text = `📊 *REPORTE DIARIO - PINTURAS VALLE FRESCO 230*\n📅 *Fecha:* ${r.fecha}\n\n💵 *Ventas:* ${fmtUSD(r.total_ventas)}\n📦 *Costo:* ${fmtUSD(r.total_costo_ventas)}\n💸 *Gastos:* ${fmtUSD(r.total_gastos)}\n📈 *Utilidad:* ${fmtUSD(r.utilidad_neta)}\n\n🔥 *Top productos:*\n${top}\n\n${r.resumen}\n\n📞 0424-151.8474`;
   window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');
 }
@@ -1885,14 +2011,22 @@ document.addEventListener('submit', async function(e){
     if(!isAdmin(user)){ toast('Sin permisos.','error'); return; }
     const f = (name) => form.querySelector(`[name="${name}"]`).value;
     const id = form.dataset.id || null;
+    let codigo = toUpper(f('codigo').trim());
+    const nombre = toUpper(f('nombre').trim());
+    const categoria = toUpper(f('categoria').trim());
+
+    if(!codigo) {
+      codigo = generateProductCode(categoria, nombre);
+    }
+
     const product = {
-      id, nombre:toUpper(f('nombre').trim()), descripcion:toUpper(f('descripcion').trim()),
-      categoria:toUpper(f('categoria').trim()), precio:parseFloat(f('precio'))||0,
+      id, codigo, nombre, descripcion:toUpper(f('descripcion').trim()),
+      categoria, precio:parseFloat(f('precio'))||0,
       costo:parseFloat(f('costo'))||0, stock:parseInt(f('stock'),10)||0,
       stock_min:parseInt(f('stock_min'),10)||0, ubicacion:toUpper(f('ubicacion').trim()),
     };
-    if(!product.nombre||!product.categoria){ toast('Completa nombre y categoría del producto.','error'); return; }
-    try{ await DB.saveProduct(product); toast(id?'Producto actualizado.':'Producto agregado.','success'); closeModal(); }
+    if(!product.codigo||!product.nombre||!product.categoria){ toast('Completa código SKU, nombre y categoría del producto.','error'); return; }
+    try{ await DB.saveProduct(product); toast(id?'Producto actualizado.':`Producto [${product.codigo}] registrado.`,'success'); closeModal(); }
     catch(e){ toast('Error al guardar: '+e.message,'error'); }
     return;
   }
@@ -1909,12 +2043,12 @@ document.addEventListener('submit', async function(e){
     try{
       await DB.saveTransaction({
         tipo:'venta', fecha:new Date().toISOString(),
-        descripcion:toUpper((noteEl&&noteEl.value.trim())||`VENTA DE ${p.nombre}`),
+        descripcion:toUpper((noteEl&&noteEl.value.trim())||`VENTA DE [${p.codigo}] ${p.nombre}`),
         categoria:'VENTAS', total:p.precio*cantidad,
-        items:[{producto_id:p.id,nombre:p.nombre,cantidad,precio:p.precio,costo:p.costo}],
+        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad, precio:p.precio, costo:p.costo}],
         usuario_id:user.id||null, usuario_nombre:user.nombre,
       });
-      toast('Venta registrada.','success'); closeModal();
+      toast('Venta y facturación registrada.','success'); closeModal();
     }catch(e){ toast('Error al registrar: '+e.message,'error'); }
     return;
   }
@@ -1945,8 +2079,8 @@ document.addEventListener('submit', async function(e){
     try{
       await DB.saveTransaction({
         tipo:'entrada_inventario', fecha:new Date().toISOString(),
-        descripcion:`ENTRADA DE INVENTARIO: ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:unitCost*cantidad,
-        items:[{producto_id:p.id,nombre:p.nombre,cantidad,precio:p.precio,costo:unitCost}],
+        descripcion:`ENTRADA DE INVENTARIO: [${p.codigo}] ${p.nombre}`, categoria:'COMPRAS DE INVENTARIO', total:unitCost*cantidad,
+        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad, precio:p.precio, costo:unitCost}],
         usuario_id:user.id||null, usuario_nombre:user.nombre,
       });
       toast('Entrada de inventario registrada.','success'); closeModal();
@@ -1962,12 +2096,10 @@ document.addEventListener('submit', async function(e){
     const rol = form.querySelector('[name="rol"]').value;
     const uid_edit = form.dataset.uid;
     if(!nombre||!/^\d{4,6}$/.test(codigo)){ toast('El PIN debe tener entre 4 y 6 dígitos.','error'); return; }
-    // Verificar que el código no esté en uso por otro usuario
     const existing = DB.getUsers().find(u=>u.codigo===codigo && u.id!==uid_edit);
     if(existing){ toast('Ese código PIN ya está en uso por otro usuario.','error'); return; }
     try{
       const saved = await DB.saveUser({id:uid_edit||null,codigo,nombre,rol});
-      // Si el usuario editó su propio perfil, actualizar sesión
       if(user.id===uid_edit) Session.set(saved);
       toast('Acceso guardado.','success'); closeModal();
     }catch(e){ toast('Error al guardar: '+e.message,'error'); }
@@ -1997,7 +2129,6 @@ document.addEventListener('change', function(e){
    INICIALIZACIÓN
    ========================================================================= */
 async function init(){
-  // Pantalla de carga
   document.getElementById('app').innerHTML = `
     <div class="min-h-screen flex flex-col items-center justify-center gap-4">
       <div class="w-14 h-14 rounded-2xl bg-amber-500 text-ink-950 flex items-center justify-center shadow-glow">
@@ -2019,7 +2150,6 @@ async function init(){
   Rate.loadFromConfig();
   renderApp();
 
-  // Obtener tasa BCV sin bloquear
   Rate.fetchBcv().then(res=>{ if(res.ok) renderApp(); });
   setInterval(()=>{ Rate.fetchBcv().then(res=>{ if(res.ok) renderApp(); }); }, RATE_REFRESH_MS);
 }
