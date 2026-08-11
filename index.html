@@ -121,7 +121,7 @@
 "use strict";
 /* =========================================================================
    PINTURAS VALLE FRESCO 230, S.R.L
-   Sistema de Contabilidad, Inventario y Facturación con Stock Decimal
+   Sistema de Contabilidad, Inventario y Facturación en Tiempo Real
    Backend: Supabase (PostgreSQL)
    ========================================================================= */
 
@@ -144,7 +144,23 @@ function normalize(s){ return String(s ?? '').toLowerCase().normalize('NFD').rep
 function fmtUSD(n){ return '$' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtBs(n){ if(n === null || n === undefined || isNaN(n)) return '—'; return 'Bs. ' + Number(n).toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtQty(n){ const v = parseFloat(n||0); return Number.isInteger(v) ? v.toString() : v.toLocaleString('es-VE',{minimumFractionDigits:1,maximumFractionDigits:2}); }
-function todayStr(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function todayStr(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function getLocalYYYYMMDD(isoStr){
+  if(!isoStr) return todayStr();
+  try{
+    const d = new Date(isoStr);
+    if(isNaN(d.getTime())) return isoStr.slice(0,10);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }catch(e){
+    return isoStr.slice(0,10);
+  }
+}
 function fmtDateShort(iso){ try{ return new Date(iso).toLocaleDateString('es-VE',{ day:'2-digit', month:'short', year:'numeric' }); }catch(e){ return iso; } }
 function fmtDateTime(iso){ try{ return new Date(iso).toLocaleString('es-VE',{ day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); }catch(e){ return iso; } }
 function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString('es-VE',{ hour:'2-digit', minute:'2-digit' }); }catch(e){ return ''; } }
@@ -171,7 +187,6 @@ function generateProductCode(category, name) {
   const normCat = normalize(category);
   const normName = normalize(name);
 
-  // Prefijo de 3 letras según Categoría u Objeto principal
   let prefix = 'PRD';
   if (normCat.includes('arena') || normName.includes('arena')) prefix = 'ARE';
   else if (normCat.includes('piedra') || normName.includes('piedra')) prefix = 'PIE';
@@ -191,7 +206,6 @@ function generateProductCode(category, name) {
     if(clean.length >= 3) prefix = clean.slice(0,3);
   }
 
-  // 3 dígitos para completar exactamente 6 caracteres (ej: ARE001, LAT012, CAL005)
   const existingCodes = new Set(DB.getProducts().map(p => (p.codigo||'').toUpperCase()));
   let num = Math.floor(Math.random() * 899 + 100);
   let generated = `${prefix}${String(num).padStart(3,'0')}`;
@@ -203,7 +217,7 @@ function generateProductCode(category, name) {
     attempts++;
   }
 
-  return generated.slice(0,6); // Forzar máximo 6 caracteres
+  return generated.slice(0,6);
 }
 
 /* =========================================================================
@@ -676,12 +690,12 @@ function renderConfirmDialog(){
 }
 
 /* =========================================================================
-   UTILIDADES DE NEGOCIO
+   UTILIDADES DE NEGOCIO Y FECHAS
    ========================================================================= */
 function txInRange(transactions, fromDate, toDate){
   return transactions.filter(t=>{
-    const d = (t.fecha||'').slice(0,10);
-    return d>=fromDate && d<=toDate;
+    const d = getLocalYYYYMMDD(t.fecha);
+    return d >= fromDate && d <= toDate;
   });
 }
 function sumByType(list, type){ return list.filter(t=>t.tipo===type).reduce((s,t)=>s+Number(t.total||0),0); }
@@ -689,8 +703,16 @@ function getLowStock(products){ return products.filter(p=>parseFloat(p.stock)<=p
 function rangeForFilter(filter){
   const today = todayStr();
   if(filter==='hoy') return [today, today];
-  if(filter==='semana'){ const d=new Date(); d.setDate(d.getDate()-6); return [d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'), today]; }
-  if(filter==='mes'){ const d=new Date(); d.setDate(d.getDate()-29); return [d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'), today]; }
+  if(filter==='semana'){
+    const d = new Date(); d.setDate(d.getDate()-6);
+    const from = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    return [from, today];
+  }
+  if(filter==='mes'){
+    const d = new Date(); d.setDate(d.getDate()-29);
+    const from = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    return [from, today];
+  }
   return ['0000-00-00','9999-99-99'];
 }
 
@@ -930,12 +952,18 @@ function refreshProductList(){
 }
 
 /* =========================================================================
-   CONTABILIDAD
+   CONTABILIDAD / CUENTAS
    ========================================================================= */
 function getFilteredTransactions(){
+  const user = Session.get();
+  const admin = isAdmin(user);
   const [from,to] = rangeForFilter(UI.txRange);
   let list = txInRange(DB.getTransactions(), from, to);
-  if(UI.txFilter!=='todas') list = list.filter(t=>t.tipo===UI.txFilter);
+  if(!admin) {
+    list = list.filter(t => t.tipo === 'venta');
+  } else if(UI.txFilter !== 'todas') {
+    list = list.filter(t => t.tipo === UI.txFilter);
+  }
   return list;
 }
 
@@ -1028,7 +1056,7 @@ function composeLocalSummary(m){
 }
 
 async function generateReport(dateStr){
-  const transactions = DB.getTransactions().filter(t=>(t.fecha||'').startsWith(dateStr));
+  const transactions = DB.getTransactions().filter(t => getLocalYYYYMMDD(t.fecha) === dateStr);
   let totalSales=0, totalCostOfSales=0, totalExpenses=0;
   const salesCount = transactions.filter(t=>t.tipo==='venta').length;
   const itemMap = {};
@@ -1073,18 +1101,56 @@ function renderReportsTab(){
   const user = Session.get();
   const admin = isAdmin(user);
   const reports = [...DB.getReports()].sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  
+  // Real-time live date breakdown metrics
+  const liveDate = UI.reportDate || todayStr();
+  const liveTx = DB.getTransactions().filter(t => getLocalYYYYMMDD(t.fecha) === liveDate);
+  const liveSales = sumByType(liveTx, 'venta');
+  const liveExpenses = sumByType(liveTx, 'gasto');
+  const liveNet = liveSales - liveExpenses;
+
   return `
   <div class="space-y-4">
-    <div><h2 class="text-lg font-bold text-white">Reportes y Resumen Ejecutivo</h2><p class="text-sm text-slate-500">Análisis detallado y balance de cierre</p></div>
-    ${admin ? `
-    <div class="glass rounded-2xl p-4 flex items-center gap-2.5 flex-wrap">
-      <input id="report-date" type="date" value="${esc(UI.reportDate)}" max="${todayStr()}" class="bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white flex-1 min-w-[140px]" />
-      <button data-action="generateReport" ${UI.generatingReport?'disabled':''} class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-ink-950 font-bold text-sm px-4 py-2.5 rounded-xl transition-colors">
-        ${UI.generatingReport ? `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Generando…` : `<i data-lucide="sparkles" class="w-4 h-4"></i> Generar Reporte`}
-      </button>
-    </div>` : ''}
+    <div><h2 class="text-lg font-bold text-white">Reportes y Resumen Ejecutivo</h2><p class="text-sm text-slate-500">Análisis detallado y balance de cierre diario</p></div>
+    
+    <div class="glass rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div class="flex items-center gap-2">
+          <i data-lucide="calendar" class="w-4 h-4 text-amber-300"></i>
+          <span class="text-xs font-bold text-white">Seleccionar fecha:</span>
+        </div>
+        <div class="flex items-center gap-2 flex-1 max-w-xs">
+          <input id="report-date" type="date" value="${esc(liveDate)}" max="${todayStr()}" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono-num focus:border-amber-500" />
+        </div>
+        ${admin ? `
+        <button data-action="generateReport" ${UI.generatingReport?'disabled':''} class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-ink-950 font-bold text-xs px-3.5 py-2 rounded-xl transition-colors shrink-0">
+          ${UI.generatingReport ? `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Generando…` : `<i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Generar Cierre`}
+        </button>` : ''}
+      </div>
+
+      <!-- Real-time billing summary for selected date -->
+      <div class="grid grid-cols-3 gap-2 text-center pt-2 border-t border-white/5">
+        <div class="bg-white/5 rounded-xl py-2 px-1">
+          <p class="text-[10px] text-slate-400 uppercase font-semibold">Ventas Reales</p>
+          <p class="text-base font-extrabold font-mono-num text-emerald-300">${fmtUSD(liveSales)}</p>
+          <p class="text-[10px] font-mono-num text-slate-500">${fmtBs(Rate.toBs(liveSales))}</p>
+        </div>
+        <div class="bg-white/5 rounded-xl py-2 px-1">
+          <p class="text-[10px] text-slate-400 uppercase font-semibold">Gastos</p>
+          <p class="text-base font-extrabold font-mono-num text-red-300">${fmtUSD(liveExpenses)}</p>
+          <p class="text-[10px] font-mono-num text-slate-500">${fmtBs(Rate.toBs(liveExpenses))}</p>
+        </div>
+        <div class="bg-white/5 rounded-xl py-2 px-1">
+          <p class="text-[10px] text-slate-400 uppercase font-semibold">Neto del Día</p>
+          <p class="text-base font-extrabold font-mono-num ${liveNet>=0?'text-amber-300':'text-red-300'}">${fmtUSD(liveNet)}</p>
+          <p class="text-[10px] font-mono-num text-slate-500">${fmtBs(Rate.toBs(liveNet))}</p>
+        </div>
+      </div>
+    </div>
+
     <div class="space-y-3">
-      ${reports.length===0 ? `<div class="glass rounded-2xl p-10 text-center"><i data-lucide="file-bar-chart" class="w-8 h-8 text-slate-600 mx-auto mb-2"></i><p class="text-slate-400 text-sm">Aún no se han generado reportes.</p></div>` :
+      <h3 class="font-bold text-white text-sm">Historial de Reportes Guardados</h3>
+      ${reports.length===0 ? `<div class="glass rounded-2xl p-10 text-center"><i data-lucide="file-bar-chart" class="w-8 h-8 text-slate-600 mx-auto mb-2"></i><p class="text-slate-400 text-sm">Aún no se han guardado reportes de cierre. Elige una fecha arriba y toca "Generar Cierre".</p></div>` :
         reports.map(renderReportCard).join('')}
     </div>
   </div>`;
@@ -1518,12 +1584,11 @@ function wireModalEvents(){
 }
 
 /* =========================================================================
-   MOTOR DE VOZ (SOPORTA NÚMEROS DECIMALES: 1,5 METROS, MEDIO METRO, ETC.)
+   MOTOR DE VOZ
    ========================================================================= */
 const SPANISH_NUMBERS = {cero:0,un:1,uno:1,una:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12,trece:13,catorce:14,quince:15,dieciseis:16,diecisiete:17,dieciocho:18,diecinueve:19,veinte:20,veintiuno:21,veintidos:22,veintitres:23,veinticuatro:24,veinticinco:25,veintiseis:26,treinta:30,cuarenta:40,cincuenta:50,sesenta:60,setenta:70,ochenta:80,noventa:90,cien:100};
 
 function extractQuantity(norm){
-  // Expresiones decimales como "1,5" o "1.5"
   const decMatch = norm.match(/(\d+[\.,]\d+)/);
   if(decMatch) return parseFloat(decMatch[0].replace(',','.'));
   
@@ -1917,7 +1982,7 @@ async function generateReportAction(){
   const dateInput = document.getElementById('report-date');
   const date = dateInput ? dateInput.value : UI.reportDate;
   UI.reportDate=date; UI.generatingReport=true; renderApp();
-  try{ await generateReport(date); toast('Reporte generado correctamente.','success'); }
+  try{ await generateReport(date); toast('Reporte de cierre generado correctamente.','success'); }
   catch(e){ console.error(e); toast('Error al generar el reporte.','error'); }
   finally{ UI.generatingReport=false; renderApp(); }
 }
@@ -2016,7 +2081,7 @@ document.addEventListener('submit', async function(e){
     return;
   }
 
-  /* VENTA (ADMITE CANTIDADES DECIMALES COMO 1.5 METROS DE ARENA) */
+  /* VENTA */
   if(type==='sale-tx'){
     const productId = form.querySelector('[name="productId"]').value;
     const cantidad = parseFloat(form.querySelector('[name="cantidad"]').value)||1;
@@ -2107,7 +2172,10 @@ document.addEventListener('input', function(e){
 document.addEventListener('change', function(e){
   if(e.target.id==='inv-category'){ UI.invCategory=e.target.value; renderApp(); }
   if(e.target.id==='tx-range'){ UI.txRange=e.target.value; renderApp(); }
-  if(e.target.id==='report-date'){ UI.reportDate=e.target.value; }
+  if(e.target.id==='report-date'){
+    UI.reportDate=e.target.value;
+    renderApp();
+  }
 });
 
 /* =========================================================================
