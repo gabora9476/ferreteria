@@ -308,6 +308,7 @@ const DB = {
       descripcion: tx.descripcion || '', categoria: tx.categoria || '',
       total: tx.total, usuario_id: tx.usuario_id || null,
       usuario_nombre: tx.usuario_nombre || '', items: tx.items || null,
+      numero_factura: tx.numero_factura || null,
     }).select().single();
     if(error) throw error;
     this._transactions.unshift(data);
@@ -370,6 +371,15 @@ const DB = {
     if(error) throw error;
     this._users = this._users.filter(u=>u.id!==id);
     return true;
+  },
+
+  /* FACTURACIÓN */
+  async nextInvoiceSerial(){
+    try{
+      const { data, error } = await sb.rpc('siguiente_numero_factura');
+      if(error){ console.warn('No se pudo generar el número de factura automático (¿ejecutaste el SQL nuevo?).', error); return null; }
+      return data || null;
+    }catch(e){ console.warn('No se pudo generar el número de factura automático.', e); return null; }
   },
 
   /* CONFIGURACIÓN */
@@ -833,7 +843,7 @@ function renderTxRow(t, showActions){
     <div class="w-9 h-9 rounded-lg ${typeMeta.bg} ${typeMeta.color} flex items-center justify-center shrink-0"><i data-lucide="${typeMeta.icon}" class="w-4 h-4"></i></div>
     <div class="min-w-0 flex-1">
       <p class="text-sm text-slate-200 truncate font-medium">${items || typeMeta.label}</p>
-      <p class="text-[11px] text-slate-500 font-mono-num">${fmtDateTime(t.fecha)} ${t.usuario_nombre?'· '+esc(t.usuario_nombre):''}</p>
+      <p class="text-[11px] text-slate-500 font-mono-num">${fmtDateTime(t.fecha)} ${t.usuario_nombre?'· '+esc(t.usuario_nombre):''}${t.numero_factura?' · Fact. N° '+esc(t.numero_factura):''}</p>
     </div>
     <div class="text-right shrink-0">
       <p class="text-sm font-bold font-mono-num ${typeMeta.color}">${typeMeta.sign}${fmtUSD(t.total)}</p>
@@ -1329,7 +1339,7 @@ function renderModal(){
   if(m.type==='user') return renderUserModal(m.data);
   return '';
 }
-function closeModal(){ UI.modal=null; renderApp(); }
+function closeModal(){ if(saleSearchRecognition && saleSearchListening){ try{ saleSearchRecognition.stop(); }catch(e){} } UI.modal=null; renderApp(); }
 
 /* ---- Modal: Producto (solo admin) con SKU Máx 6 Caracteres ---- */
 function renderProductModal(p){
@@ -1468,31 +1478,160 @@ function renderTransactionModal(txType, data){
   }
 
   // venta
+  if(!UI.modal.cart) UI.modal.cart = [];
   const body = `
   <form id="tx-form" data-form="sale-tx" class="space-y-3">
     <div>
-      <label class="text-xs text-slate-400 block mb-1">Producto / Material a facturar</label>
-      <select name="productId" id="sale-product-select" required class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500">
-        <option value="">Selecciona por nombre o SKU…</option>
-        ${products.map(p=>`<option value="${p.id}" data-code="${esc(p.codigo)}" data-price="${p.precio}" data-cost="${p.costo}" data-stock="${p.stock}" ${parseFloat(p.stock)<=0?'disabled':''}>[${esc(p.codigo)}] ${esc(p.nombre)} — ${fmtUSD(p.precio)} · stock ${fmtQty(p.stock)}</option>`).join('')}
-      </select>
+      <label class="text-xs text-slate-400 block mb-1">Buscar producto por código o nombre</label>
+      <div class="relative">
+        <i data-lucide="search" class="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+        <input type="text" id="sale-search-input" autocomplete="off" placeholder="Escribe el código SKU o el nombre…" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl pl-9 pr-11 py-2.5 text-sm text-white placeholder-slate-500 focus:border-amber-500 transition-colors" />
+        <button type="button" id="sale-mic-btn" data-action="toggleSaleMic" class="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg flex items-center justify-center bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 transition-colors" title="Buscar por voz">
+          <i data-lucide="mic" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div id="sale-suggestions" class="mt-1.5 space-y-1 max-h-44 overflow-y-auto scrollbar-none"></div>
     </div>
     <div>
-      <label class="text-xs text-slate-400 block mb-1">Cantidad a vender (admite 1, 1.5, 2.5, etc.)</label>
-      <input name="cantidad" id="sale-qty" type="number" min="0.01" step="0.01" required value="1" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono-num focus:border-amber-500" placeholder="Ej: 1.5" />
+      <label class="text-xs text-slate-400 block mb-1.5 flex items-center justify-between">
+        <span>Artículos de la venta</span>
+        <span class="text-[10px] text-slate-500">Toca un resultado arriba para agregarlo</span>
+      </label>
+      <div id="sale-cart" class="space-y-1.5">${renderSaleCartHTML(UI.modal.cart)}</div>
     </div>
     <div>
       <label class="text-xs text-slate-400 block mb-1">Nota (opcional)</label>
-      <input name="descripcion" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="SE AUTOCOMPLETA CON SKU Y NOMBRE" />
+      <input name="descripcion" data-uppercase="true" class="w-full bg-ink-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-amber-500" placeholder="SE AUTOCOMPLETA CON LOS ARTÍCULOS" />
     </div>
     <div class="bg-white/5 rounded-xl p-3 flex items-center justify-between">
       <span class="text-xs text-slate-400">Total estimado</span>
       <span id="sale-total-preview" class="text-lg font-extrabold font-mono-num text-emerald-300">—</span>
     </div>
-    <p class="text-[11px] text-slate-500">Vendedor: ${esc(user.nombre)}</p>
+    <p class="text-[11px] text-slate-500">Vendedor: ${esc(user.nombre)} · el N° de factura se asigna automáticamente al registrar</p>
   </form>`;
   const footer = `<button form="tx-form" type="submit" class="w-full bg-emerald-500 hover:bg-emerald-400 text-ink-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2"><i data-lucide="shopping-cart" class="w-4 h-4"></i> Facturar / Registrar Venta</button>`;
   return modalShell('Registrar venta','shopping-cart',body,footer);
+}
+
+/* ---- Venta: búsqueda de productos (código o nombre) y carrito de artículos ---- */
+function searchSaleProducts(query){
+  const q = normalize(query);
+  if(!q) return [];
+  return DB.getProducts().filter(p=>{
+    if(parseFloat(p.stock)<=0) return false;
+    return normalize(p.codigo).includes(q) || normalize(p.nombre).includes(q);
+  }).slice(0,8);
+}
+function renderSaleSuggestionsHTML(list){
+  if(!list.length) return '';
+  return list.map(p=>`
+    <button type="button" data-suggest-id="${esc(p.id)}" class="w-full text-left flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-amber-500/15 border border-transparent hover:border-amber-500/30 transition-colors">
+      <span class="min-w-0 truncate text-xs text-slate-200"><span class="font-mono-num font-bold text-amber-300">[${esc(p.codigo)}]</span> ${esc(p.nombre)}</span>
+      <span class="text-[11px] font-mono-num text-slate-400 shrink-0">${fmtUSD(p.precio)} · ${fmtQty(p.stock)}u.</span>
+    </button>`).join('');
+}
+function renderSaleCartHTML(cart){
+  if(!cart || !cart.length) return `<div class="text-center py-4 px-3 text-xs text-slate-500 border border-dashed border-slate-700 rounded-xl">Aún no has agregado artículos. Busca arriba por código, nombre o usa el micrófono.</div>`;
+  return cart.map((it,idx)=>{
+    const lineTotal = it.precio*it.cantidad;
+    const over = it.cantidad > it.stock;
+    return `
+    <div class="flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2 ${over?'ring-1 ring-red-500/50':''}">
+      <div class="min-w-0 flex-1">
+        <p class="text-sm text-white font-medium truncate">[${esc(it.codigo)}] ${esc(it.nombre)}</p>
+        <p class="text-[11px] font-mono-num ${over?'text-red-400':'text-slate-500'}">${fmtUSD(it.precio)} c/u · stock ${fmtQty(it.stock)}${over?' · excede stock':''}</p>
+      </div>
+      <input type="number" min="0.01" step="0.01" value="${it.cantidad}" data-cart-qty="${idx}" class="w-16 bg-ink-800/70 border border-slate-700 rounded-lg px-1.5 py-1.5 text-xs text-white font-mono-num text-center focus:border-amber-500 shrink-0" />
+      <span class="text-xs font-bold font-mono-num text-emerald-300 w-16 text-right shrink-0">${fmtUSD(lineTotal)}</span>
+      <button type="button" data-cart-remove="${idx}" class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-300 hover:bg-red-500/10 transition-colors shrink-0" title="Quitar artículo"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+    </div>`;
+  }).join('');
+}
+function addToSaleCart(productId){
+  const p = DB.getProducts().find(x=>x.id===productId);
+  if(!p || !UI.modal || !UI.modal.cart) return;
+  if(parseFloat(p.stock)<=0){ toast('Ese producto no tiene stock disponible.','error'); return; }
+  const existing = UI.modal.cart.find(it=>it.productId===productId);
+  if(existing){ existing.cantidad = parseFloat((existing.cantidad+1).toFixed(2)); }
+  else { UI.modal.cart.push({productId:p.id, codigo:p.codigo, nombre:p.nombre, precio:parseFloat(p.precio)||0, costo:parseFloat(p.costo)||0, stock:parseFloat(p.stock)||0, cantidad:1}); }
+  const input = document.getElementById('sale-search-input');
+  const box = document.getElementById('sale-suggestions');
+  if(input) input.value='';
+  if(box) box.innerHTML='';
+  refreshSaleCartUI();
+}
+function removeFromSaleCart(idx){
+  if(!UI.modal || !UI.modal.cart) return;
+  UI.modal.cart.splice(idx,1);
+  refreshSaleCartUI();
+}
+function updateSaleCartQty(idx, value){
+  if(!UI.modal || !UI.modal.cart) return;
+  const it = UI.modal.cart[idx];
+  if(!it) return;
+  let q = parseFloat(value);
+  if(isNaN(q) || q<=0) q = 0.01;
+  it.cantidad = q;
+  refreshSaleCartUI(true);
+}
+function refreshSaleCartUI(skipListRerender){
+  if(!skipListRerender){
+    const cartBox = document.getElementById('sale-cart');
+    if(cartBox){ cartBox.innerHTML = renderSaleCartHTML(UI.modal.cart||[]); if(window.lucide) lucide.createIcons({nodes:[cartBox]}); }
+  }
+  const preview = document.getElementById('sale-total-preview');
+  const cart = (UI.modal && UI.modal.cart) || [];
+  if(preview){
+    const total = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
+    const overStock = cart.some(it=>it.cantidad>it.stock);
+    preview.textContent = cart.length ? `${fmtUSD(total)} · ${fmtBs(Rate.toBs(total))}` : '—';
+    preview.classList.toggle('text-red-400', overStock);
+    preview.classList.toggle('text-emerald-300', !overStock);
+  }
+}
+
+/* ---- Venta: búsqueda de productos por voz (mismo motor de reconocimiento que el asistente) ---- */
+let saleSearchRecognition = null;
+let saleSearchListening = false;
+function setupSaleSearchRecognition(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR) return null;
+  const rec = new SR();
+  rec.continuous = false;
+  rec.interimResults = false;
+  rec.lang = 'es-VE';
+  rec.onstart = ()=>{ saleSearchListening=true; updateSaleMicUI(); };
+  rec.onerror = ()=>{ saleSearchListening=false; updateSaleMicUI(); };
+  rec.onend = ()=>{ saleSearchListening=false; updateSaleMicUI(); };
+  rec.onresult = (e)=>{
+    let text='';
+    for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal) text += e.results[i][0].transcript; }
+    text = text.trim();
+    if(!text) return;
+    const input = document.getElementById('sale-search-input');
+    const box = document.getElementById('sale-suggestions');
+    if(input) input.value = text;
+    if(box) box.innerHTML = renderSaleSuggestionsHTML(searchSaleProducts(text));
+  };
+  return rec;
+}
+function toggleSaleMic(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ toast('Tu navegador no soporta dictado por voz. Usa Google Chrome.','error'); return; }
+  if(!saleSearchRecognition) saleSearchRecognition = setupSaleSearchRecognition();
+  if(!saleSearchRecognition) return;
+  if(saleSearchListening){ try{ saleSearchRecognition.stop(); }catch(e){} }
+  else { try{ saleSearchRecognition.start(); }catch(e){ console.error(e); toast('No se pudo iniciar el micrófono: '+e.message,'error'); } }
+}
+function updateSaleMicUI(){
+  const btn = document.getElementById('sale-mic-btn');
+  if(!btn) return;
+  btn.classList.toggle('bg-red-500/20', saleSearchListening);
+  btn.classList.toggle('text-red-300', saleSearchListening);
+  btn.classList.toggle('bg-sky-500/15', !saleSearchListening);
+  btn.classList.toggle('text-sky-300', !saleSearchListening);
+  btn.innerHTML = `<i data-lucide="${saleSearchListening?'mic-off':'mic'}" class="w-4 h-4"></i>`;
+  if(window.lucide) lucide.createIcons({nodes:[btn]});
 }
 
 /* ---- Modal: Usuario (solo admin) ---- */
@@ -1550,22 +1689,34 @@ function wireModalEvents(){
   }
 
   if(m.type==='transaction' && m.txType==='venta'){
-    const sel = document.getElementById('sale-product-select');
-    const qty = document.getElementById('sale-qty');
-    const preview = document.getElementById('sale-total-preview');
-    const desc = document.querySelector('#tx-form [name="descripcion"]');
-    const update = ()=>{
-      const opt = sel.options[sel.selectedIndex];
-      const price = opt ? Number(opt.dataset.price||0) : 0;
-      const stock = opt ? parseFloat(opt.dataset.stock||0) : Infinity;
-      const code = opt ? opt.dataset.code : '';
-      const q = Math.max(0.01, parseFloat(qty.value||1));
-      const total = price*q;
-      if(preview) preview.textContent = sel.value ? `${fmtUSD(total)} · ${fmtBs(Rate.toBs(total))}` : '—';
-      if(sel.value && desc && !desc.dataset.userEdited){ desc.value = `VENTA DE [${code}] ${opt.text.split(' — ')[0].replace(/^\[.*?\]\s*/,'')}`; }
-      if(preview){ preview.classList.toggle('text-red-400', sel.value && q>stock); preview.classList.toggle('text-emerald-300', !sel.value || q<=stock); }
-    };
-    if(sel){ sel.addEventListener('change',update); qty.addEventListener('input',update); if(desc) desc.addEventListener('input',()=>desc.dataset.userEdited='1'); update(); }
+    if(!UI.modal.cart) UI.modal.cart = [];
+    const searchInput = document.getElementById('sale-search-input');
+    const suggestBox = document.getElementById('sale-suggestions');
+    const cartBox = document.getElementById('sale-cart');
+
+    const doSearch = debounce(()=>{
+      if(!searchInput || !suggestBox) return;
+      suggestBox.innerHTML = renderSaleSuggestionsHTML(searchSaleProducts(searchInput.value));
+    }, 120);
+
+    if(searchInput) searchInput.addEventListener('input', doSearch);
+    if(suggestBox){
+      suggestBox.addEventListener('click', (e)=>{
+        const btn = e.target.closest('[data-suggest-id]');
+        if(btn) addToSaleCart(btn.dataset.suggestId);
+      });
+    }
+    if(cartBox){
+      cartBox.addEventListener('click', (e)=>{
+        const rm = e.target.closest('[data-cart-remove]');
+        if(rm) removeFromSaleCart(parseInt(rm.dataset.cartRemove,10));
+      });
+      cartBox.addEventListener('input', (e)=>{
+        const qtyEl = e.target.closest('[data-cart-qty]');
+        if(qtyEl) updateSaleCartQty(parseInt(qtyEl.dataset.cartQty,10), qtyEl.value);
+      });
+    }
+    refreshSaleCartUI(true);
   }
 
   if(m.type==='transaction' && m.txType==='entrada_inventario'){
@@ -1695,13 +1846,15 @@ async function commitPendingVoiceAction(pending){
     if(pending.type==='venta'){
       const p = DB.getProducts().find(x=>x.id===pending.productId);
       if(!p || parseFloat(p.stock)<pending.quantity){ toast('El stock cambió, no es posible completar esta venta.','error'); return false; }
+      const numeroFactura = await DB.nextInvoiceSerial();
       await DB.saveTransaction({
         tipo:'venta', fecha:new Date().toISOString(),
         descripcion:`VENTA POR VOZ DE [${p.codigo}] ${p.nombre}`, categoria:'VENTAS', total:p.precio*pending.quantity,
+        numero_factura:numeroFactura,
         items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad:pending.quantity, precio:p.precio, costo:p.costo}],
         usuario_id:user.id||null, usuario_nombre:user.nombre+' (VOZ)',
       });
-      toast(`Venta registrada: ${fmtQty(pending.quantity)}× [${p.codigo}] ${p.nombre}`,'success');
+      toast(numeroFactura?`Venta registrada · Factura N° ${numeroFactura}`:`Venta registrada: ${fmtQty(pending.quantity)}× [${p.codigo}] ${p.nombre}`,'success');
       return true;
     }
     if(pending.type==='entrada_inventario'){
@@ -1901,7 +2054,7 @@ function shareProduct(id){
 function openTransactionModal(txType){
   const user = Session.get();
   if(!isAdmin(user) && txType !== 'venta'){ toast('Solo los administradores pueden registrar gastos y entradas.','error'); return; }
-  UI.modal={type:'transaction',txType:txType,data:null}; renderApp();
+  UI.modal={type:'transaction',txType:txType,data:null,cart:(txType==='venta'?[]:undefined)}; renderApp();
 }
 
 async function deleteTx(id){
@@ -1914,7 +2067,8 @@ function shareTx(id){
   if(!t) return;
   const isSale = t.tipo==='venta';
   const items = t.items ? t.items.map(i=>`• ${fmtQty(i.cantidad)}× [${i.codigo||'SKU'}] ${i.nombre} (${fmtUSD(i.precio)} c/u)`).join('\n') : '';
-  const text = `🧾 *COMPROBANTE DE FACTURACIÓN - PINTURAS VALLE FRESCO 230*\n\n📋 *Tipo:* ${isSale?'Venta':(t.tipo==='gasto'?'Gasto':'Entrada de inventario')}\n📅 *Fecha:* ${fmtDateTime(t.fecha)}\n👤 *Atendido por:* ${t.usuario_nombre||'Sistema'}\n\n📝 ${t.descripcion}\n${items}\n\n💰 *TOTAL:* ${fmtUSD(t.total)} / *${fmtBs(Rate.toBs(t.total))}*\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
+  const facturaLine = (isSale && t.numero_factura) ? `\n🧾 *N° de Factura:* ${t.numero_factura}` : '';
+  const text = `🧾 *COMPROBANTE DE FACTURACIÓN - PINTURAS VALLE FRESCO 230*\n\n📋 *Tipo:* ${isSale?'Venta':(t.tipo==='gasto'?'Gasto':'Entrada de inventario')}\n📅 *Fecha:* ${fmtDateTime(t.fecha)}\n👤 *Atendido por:* ${t.usuario_nombre||'Sistema'}${facturaLine}\n\n📝 ${t.descripcion}\n${items}\n\n💰 *TOTAL:* ${fmtUSD(t.total)} / *${fmtBs(Rate.toBs(t.total))}*\n📞 0424-151.8474 / 0416-538.54.14\n_(Tasa: ${fmtBs(Rate.sellRate())} /USD)_`;
   window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank');
 }
 
@@ -2009,6 +2163,7 @@ document.addEventListener('click', function(e){
     case 'voiceGoToProduct': voiceGoToProduct(id); break;
     case 'refreshRate': refreshRateAction(); break;
     case 'openTransactionModal': openTransactionModal(el.dataset.txtype); break;
+    case 'toggleSaleMic': toggleSaleMic(); break;
     case 'shareTx': shareTx(id); break;
     case 'deleteTx': deleteTx(id); break;
     case 'quickStock': quickStock(id, parseFloat(el.dataset.delta||0)); break;
@@ -2081,24 +2236,32 @@ document.addEventListener('submit', async function(e){
     return;
   }
 
-  /* VENTA */
+  /* VENTA (carrito multi-artículo) */
   if(type==='sale-tx'){
-    const productId = form.querySelector('[name="productId"]').value;
-    const cantidad = parseFloat(form.querySelector('[name="cantidad"]').value)||1;
+    const cart = (UI.modal && UI.modal.cart) || [];
     const noteEl = form.querySelector('[name="descripcion"]');
-    if(!productId){ toast('Selecciona un producto.','error'); return; }
-    const p = DB.getProducts().find(x=>x.id===productId);
-    if(!p){ toast('Producto no encontrado.','error'); return; }
-    if(parseFloat(p.stock)<cantidad){ toast(`Stock insuficiente. Quedan ${fmtQty(p.stock)} unidades.`,'error'); return; }
+    if(!cart.length){ toast('Agrega al menos un artículo a la venta.','error'); return; }
+    for(const it of cart){
+      const p = DB.getProducts().find(x=>x.id===it.productId);
+      if(!p){ toast(`El producto [${it.codigo}] ${it.nombre} ya no existe.`,'error'); return; }
+      if(!(parseFloat(it.cantidad)>0)){ toast(`Cantidad inválida para [${it.codigo}] ${it.nombre}.`,'error'); return; }
+      if(parseFloat(p.stock)<it.cantidad){ toast(`Stock insuficiente de [${p.codigo}] ${p.nombre}. Quedan ${fmtQty(p.stock)} unidades.`,'error'); return; }
+    }
+    const total = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
+    const autoDesc = cart.length===1
+      ? `VENTA DE [${cart[0].codigo}] ${cart[0].nombre}`
+      : `VENTA DE ${cart.length} ARTÍCULOS: ${cart.map(it=>`[${it.codigo}]`).join(' ')}`;
     try{
+      const numeroFactura = await DB.nextInvoiceSerial();
       await DB.saveTransaction({
         tipo:'venta', fecha:new Date().toISOString(),
-        descripcion:toUpper((noteEl&&noteEl.value.trim())||`VENTA DE [${p.codigo}] ${p.nombre}`),
-        categoria:'VENTAS', total:p.precio*cantidad,
-        items:[{producto_id:p.id, codigo:p.codigo, nombre:p.nombre, cantidad, precio:p.precio, costo:p.costo}],
+        descripcion:toUpper((noteEl&&noteEl.value.trim())||autoDesc),
+        categoria:'VENTAS', total, numero_factura:numeroFactura,
+        items:cart.map(it=>({producto_id:it.productId, codigo:it.codigo, nombre:it.nombre, cantidad:it.cantidad, precio:it.precio, costo:it.costo})),
         usuario_id:user.id||null, usuario_nombre:user.nombre,
       });
-      toast('Venta y facturación registrada.','success'); closeModal();
+      toast(numeroFactura?`Venta registrada · Factura N° ${numeroFactura}`:'Venta registrada (sin N° de factura automático: instala el SQL nuevo).','success');
+      closeModal();
     }catch(e){ toast('Error al registrar: '+e.message,'error'); }
     return;
   }
